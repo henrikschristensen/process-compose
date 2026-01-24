@@ -931,29 +931,72 @@ func (p *Process) validateProcess() error {
 	return nil
 }
 
+func (p *Process) collectPortPids() map[int]struct{} {
+	pids := map[int]struct{}{
+		p.procState.Pid: {},
+	}
+	if p.procState.Pid == 0 {
+		return pids
+	}
+	if p.processTree == nil {
+		return pids
+	}
+	if err := p.processTree.Update(); err != nil {
+		log.Err(err).Msgf("failed to update process tree for %s", p.getName())
+		return pids
+	}
+	descendants := p.processTree.GetDescendants(int32(p.procState.Pid))
+	for _, proc := range descendants {
+		pids[int(proc.Pid)] = struct{}{}
+	}
+	return pids
+}
+
 func (p *Process) getOpenPorts(ports *types.ProcessPorts) error {
-	socks, err := netstat.TCPSocks(func(s *netstat.SockTabEntry) bool {
+	pids := p.collectPortPids()
+	if err := p.collectSockets("TCP", netstat.TCPSocks, netstat.TCP6Socks, func(s *netstat.SockTabEntry) bool {
 		return s.State == netstat.Listen
-	})
-	if err != nil {
-		log.Err(err).Msgf("failed to get open ports for %s", p.getName())
+	}, pids, &ports.TcpPorts); err != nil {
 		return err
 	}
-	socksv6, err := netstat.TCP6Socks(func(s *netstat.SockTabEntry) bool {
-		return s.State == netstat.Listen
-	})
-	socks = append(socks, socksv6...)
+
+	return p.collectSockets("UDP", netstat.UDPSocks, netstat.UDP6Socks, func(s *netstat.SockTabEntry) bool {
+		return s.RemoteAddr != nil && s.RemoteAddr.Port == 0
+	}, pids, &ports.UdpPorts)
+}
+
+func (p *Process) collectSockets(label string, v4, v6 func(netstat.AcceptFn) ([]netstat.SockTabEntry, error), filter netstat.AcceptFn, pids map[int]struct{}, target *[]uint16) error {
+	socks, err := v4(filter)
 	if err != nil {
-		log.Err(err).Msgf("failed to get open ports for %s", p.getName())
+		log.Err(err).Msgf("failed to get open %s ports for %s", label, p.getName())
 		return err
 	}
+	socks6, err := v6(filter)
+	if err != nil {
+		log.Err(err).Msgf("failed to get open %s ports for %s", label, p.getName())
+		return err
+	}
+	socks = append(socks, socks6...)
+
 	for _, e := range socks {
-		if e.Process != nil && e.Process.Pid == p.procState.Pid {
-			log.Debug().Msgf("%s is listening on %d", p.getName(), e.LocalAddr.Port)
-			ports.TcpPorts = append(ports.TcpPorts, e.LocalAddr.Port)
+		if e.Process == nil {
+			continue
 		}
+		if _, ok := pids[e.Process.Pid]; !ok {
+			continue
+		}
+		p.logOpenPort(label, e.LocalAddr.Port)
+		*target = append(*target, e.LocalAddr.Port)
 	}
 	return nil
+}
+
+func (p *Process) logOpenPort(label string, port uint16) {
+	if label == "UDP" {
+		log.Debug().Msgf("%s is listening on %d/udp", p.getName(), port)
+		return
+	}
+	log.Debug().Msgf("%s is listening on %d", p.getName(), port)
 }
 
 func (p *Process) getExitCode() int {

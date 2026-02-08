@@ -156,7 +156,7 @@ func (pv *pcView) handlePassEntered(textInput *tview.InputField) {
 	err := pv.project.SetProcessPassword(name, pass)
 	cancel()
 	if err != nil {
-		pv.attentionMessage(err.Error(), 3*time.Second)
+		pv.attentionMessage(err.Error(), 3*time.Second, true)
 		return
 	}
 	pv.commandModeType = commandModeOff

@@ -30,9 +30,20 @@ To interact with the process, you need to switch focus to the terminal view.
 - **Switch Focus**: Press `TAB` to switch focus from the process list/logs to the interactive terminal.
 - **Exit Focus**: Press `CTRL+A` followed by `ESC` to release focus from the interactive terminal and return to the TUI navigation.
 
+### Scrolling
+
+To view earlier output of an interactive process:
+- **Mouse**: Scroll up with the mouse wheel. This automatically enters **Scroll Mode**.
+- **Keyboard**: Press `CTRL+A` (or the configured exit key) to enter **Scroll Mode**, then use `UP`/`DOWN` arrows or `PageUp`/`PageDown` to navigate.
+
+To exit Scroll Mode and return to live output, press `ESC`.
+
 ### Keybindings
 
 | Key Combination | Action |
 | :--- | :--- |
 | `TAB` | Switch focus to the interactive process terminal (Input Mode). |
 | `CTRL+A` followed by `ESC` | Exit Input Mode and return to TUI navigation (Normal Mode). |
+| `CTRL+A` followed by `UP`/`DOWN` | Enter Scroll Mode and scroll the history. |
+| `Mouse Wheel` | Scroll history (enters Scroll Mode automatically). |
+| `ESC` (in Scroll Mode) | Exit Scroll Mode and jump to bottom. |

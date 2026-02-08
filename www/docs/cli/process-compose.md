@@ -9,7 +9,7 @@ process-compose [flags]
 ### Options
 
 ```
-      --address string           address to listen on (env: PC_ADDRESS)
+      --address string           address to listen on (env: PC_ADDRESS) (default "localhost")
   -f, --config stringArray       path to config files to load (env: PC_CONFIG_FILES)
       --detach-on-success        detach the process-compose TUI after successful startup. Requires --detached-with-tui
   -D, --detached                 run process-compose in detached mode
@@ -48,6 +48,7 @@ process-compose [flags]
 * [process-compose graph](process-compose_graph.md)	 - Display process dependency graph
 * [process-compose info](process-compose_info.md)	 - Print configuration info
 * [process-compose list](process-compose_list.md)	 - List available processes
+* [process-compose namespace](process-compose_namespace.md)	 - Perform operations on a namespace (start, stop, restart, list)
 * [process-compose process](process-compose_process.md)	 - Execute operations on the available processes
 * [process-compose project](process-compose_project.md)	 - Execute operations on a running Process Compose project
 * [process-compose recipe](process-compose_recipe.md)	 - Manage process-compose recipes

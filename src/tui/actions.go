@@ -44,6 +44,7 @@ const (
 	ActionTermExit         = ActionName("term_exit")
 	ActionReloadConfig     = ActionName("reload_config")
 	ActionDependencyGraph  = ActionName("dependency_graph")
+	ActionNamespaceOps     = ActionName("namespace_ops")
 )
 
 var defaultShortcuts = map[ActionName]tcell.Key{
@@ -76,11 +77,13 @@ var defaultShortcuts = map[ActionName]tcell.Key{
 	ActionReloadConfig:     tcell.KeyCtrlL,
 	ActionTermExit:         tcell.KeyCtrlA,
 	ActionDependencyGraph:  tcell.KeyCtrlQ,
+	ActionNamespaceOps:     tcell.KeyRune,
 }
 
 var defaultShortcutsRunes = map[ActionName]rune{
-	ActionProcFilter: '/',
-	ActionMarkLog:    'm',
+	ActionProcFilter:   '/',
+	ActionMarkLog:      'm',
+	ActionNamespaceOps: 'n',
 }
 
 var generalActionsOrder = []ActionName{
@@ -112,6 +115,7 @@ var procActionsOrder = []ActionName{
 	ActionEditProcess,
 	ActionReloadConfig,
 	ActionNsFilter,
+	ActionNamespaceOps,
 	ActionHideDisabled,
 	ActionDependencyGraph,
 	ActionQuit,
@@ -401,6 +405,9 @@ func newShortCuts() *ShortCuts {
 			},
 			ActionDependencyGraph: {
 				Description: "Dependency Graph",
+			},
+			ActionNamespaceOps: {
+				Description: "Namespace Operations",
 			},
 		},
 	}

@@ -216,6 +216,9 @@
         "is_elevated": {
           "type": "boolean"
         },
+        "is_interactive": {
+          "type": "boolean"
+        },
         "launch_timeout_seconds": {
           "type": "integer"
         },
@@ -242,6 +245,9 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "schedule": {
+          "$ref": "#/$defs/ScheduleConfig"
         }
       },
       "type": "object"
@@ -366,6 +372,26 @@
         },
         "exit_on_skipped": {
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ScheduleConfig": {
+      "properties": {
+        "cron": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "interval": {
+          "type": "string"
+        },
+        "run_on_start": {
+          "type": "boolean"
+        },
+        "max_concurrent": {
+          "type": "integer"
         }
       },
       "type": "object"

@@ -67,6 +67,9 @@ test:
 testrace:
 	go test -race ./...
 
+testrace-clean:
+	go clean -testcache && go test -race ./...
+
 coverhtml:
 	go test -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out

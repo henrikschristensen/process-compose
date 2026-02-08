@@ -458,6 +458,43 @@ process-compose -n ns1 -n ns3
 # will start only ns1 and ns3. ns2 namespace won't run and won't be visible in the TUI
 ```
 
+### Namespace Operations
+
+You can perform bulk operations on namespaces using the CLI or TUI.
+
+#### CLI Commands
+
+*   **List Namespaces:**
+    ```shell
+    process-compose namespace list
+    # or use those aliases
+    process-compose ns ls
+    ```
+
+*   **Start Namespace:**
+    ```shell
+    process-compose namespace start <namespace_name>
+    ```
+
+*   **Stop Namespace:**
+    ```shell
+    process-compose namespace stop <namespace_name>
+    ```
+
+*   **Restart Namespace:**
+    ```shell
+    process-compose namespace restart <namespace_name>
+    ```
+
+#### TUI Interaction
+
+In the TUI, press `n` to open the **Namespace Operations** modal.
+1.  Select a namespace from the list.
+2.  Press `Tab` to switch to the Operation list.
+3.  Select an operation (`Stop`, `Start`, `Restart`).
+4.  Press `Enter` to execute.
+
+
 ## Misc
 
 #### Strict Configuration Validation

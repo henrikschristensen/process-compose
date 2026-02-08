@@ -230,6 +230,88 @@ func (api *PcApi) StartProcess(c *gin.Context) {
 }
 
 // @Schemes
+// @Id				StartNamespace
+// @Description	Starts the namespace
+// @Tags			Namespace
+// @Summary		Start a namespace
+// @Produce		json
+// @Param			name	path		string				true	"Namespace Name"
+// @Success		200		{object}	api.NameResponse	"Started Namespace Name"
+// @Failure		400		{object}	map[string]string
+// @Router			/namespace/start/{name} [post]
+func (api *PcApi) StartNamespace(c *gin.Context) {
+	name := c.Param("name")
+	err := api.project.StartNamespace(name)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"name": name})
+}
+
+// @Schemes
+// @Id				StopNamespace
+// @Description	Stops the namespace
+// @Tags			Namespace
+// @Summary		Stop a namespace
+// @Produce		json
+// @Param			name	path		string				true	"Namespace Name"
+// @Success		200		{object}	api.NameResponse	"Stopped Namespace Name"
+// @Failure		400		{object}	map[string]string
+// @Router			/namespace/stop/{name} [post]
+func (api *PcApi) StopNamespace(c *gin.Context) {
+	name := c.Param("name")
+	err := api.project.StopNamespace(name)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"name": name})
+}
+
+// @Schemes
+// @Id				RestartNamespace
+// @Description	Restarts the namespace
+// @Tags			Namespace
+// @Summary		Restart a namespace
+// @Produce		json
+// @Param			name	path		string				true	"Namespace Name"
+// @Success		200		{object}	api.NameResponse	"Restarted Namespace Name"
+// @Failure		400		{object}	map[string]string
+// @Router			/namespace/restart/{name} [post]
+func (api *PcApi) RestartNamespace(c *gin.Context) {
+	name := c.Param("name")
+	err := api.project.RestartNamespace(name)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"name": name})
+}
+
+// @Schemes
+// @Id				GetNamespaces
+// @Description	Retrieves all unique namespaces
+// @Tags			Namespace
+// @Summary		Get all namespaces
+// @Produce		json
+// @Success		200	{object}	[]string	"Namespaces List"
+// @Failure		400	{object}	map[string]string
+// @Router			/namespaces [get]
+func (api *PcApi) GetNamespaces(c *gin.Context) {
+	namespaces, err := api.project.GetNamespaces()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, namespaces)
+}
+
+// @Schemes
 // @Id				RestartProcess
 // @Description	Restarts the process
 // @Tags			Process

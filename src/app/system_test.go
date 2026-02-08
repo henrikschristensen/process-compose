@@ -162,6 +162,9 @@ func TestSystem_TestComposeChainExit(t *testing.T) {
 			return
 		}
 		err = runner.Run()
+		if err == nil {
+			t.Fatal("Project.Run() returned nil, want error")
+		}
 		want := "project non-zero exit code: 42"
 		if want != err.Error() {
 			t.Errorf("Project.Run() = %v, want %v", err, want)

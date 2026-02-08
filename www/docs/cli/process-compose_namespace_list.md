@@ -1,16 +1,15 @@
-## process-compose version
+## process-compose namespace list
 
-Print version and build info
+List all available namespaces
 
 ```
-process-compose version [flags]
+process-compose namespace list [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help    help for version
-  -s, --short   Print only version
+  -h, --help   help for list
 ```
 
 ### Options inherited from parent commands
@@ -28,5 +27,5 @@ process-compose version [flags]
 
 ### SEE ALSO
 
-* [process-compose](process-compose.md)	 - Processes scheduler and orchestrator
+* [process-compose namespace](process-compose_namespace.md)	 - Perform operations on a namespace (start, stop, restart, list)
 

@@ -270,19 +270,19 @@ func (p *ProjectRunner) waitIfNeeded(process *types.ProcessConfig) error {
 func (p *ProjectRunner) onProcessEnd(exitCode int, procConf *types.ProcessConfig) {
 	if (exitCode != 0 && procConf.RestartPolicy.Restart == types.RestartPolicyExitOnFailure) ||
 		procConf.RestartPolicy.ExitOnEnd {
-		_ = p.ShutDownProject()
 		p.exitCodeMutex.Lock()
 		p.exitCode = exitCode
 		p.exitCodeMutex.Unlock()
+		_ = p.ShutDownProject()
 	}
 }
 
 func (p *ProjectRunner) onProcessSkipped(procConf *types.ProcessConfig) {
 	if procConf.RestartPolicy.ExitOnSkipped {
-		_ = p.ShutDownProject()
 		p.exitCodeMutex.Lock()
 		p.exitCode = 1
 		p.exitCodeMutex.Unlock()
+		_ = p.ShutDownProject()
 	}
 }
 
@@ -507,6 +507,164 @@ func (p *ProjectRunner) StopProcesses(names []string) (map[string]string, error)
 		return stopped, errors.New("failed to stop some processes")
 	}
 	return stopped, nil
+}
+
+func (p *ProjectRunner) getNamespaceProcesses(namespace string) ([]string, error) {
+	if namespace == "" {
+		namespace = types.DefaultNamespace
+	}
+	// Use dependency order to ensuring correct order for bulk operations
+	allNames, err := p.project.GetDependenciesOrderNames()
+	if err != nil {
+		return nil, err
+	}
+
+	var nsProcs []string
+	for _, name := range allNames {
+		if proc, ok := p.project.Processes[name]; ok {
+			procNs := proc.Namespace
+			if procNs == "" {
+				procNs = types.DefaultNamespace
+			}
+			if procNs == namespace {
+				nsProcs = append(nsProcs, name)
+			}
+		}
+	}
+	if len(nsProcs) == 0 {
+		return nil, fmt.Errorf("namespace %s not found (no processes assigned)", namespace)
+	}
+	return nsProcs, nil
+}
+
+func (p *ProjectRunner) GetNamespaces() ([]string, error) {
+	states, err := p.GetProcessesState()
+	if err != nil {
+		return nil, err
+	}
+
+	nsMap := make(map[string]struct{})
+	for _, state := range states.States {
+		ns := state.Namespace
+		if ns == "" {
+			ns = types.DefaultNamespace
+		}
+		nsMap[ns] = struct{}{}
+	}
+
+	namespaces := make([]string, 0, len(nsMap))
+	for ns := range nsMap {
+		namespaces = append(namespaces, ns)
+	}
+	slices.Sort(namespaces)
+
+	return namespaces, nil
+}
+
+func (p *ProjectRunner) StartNamespace(namespace string) error {
+	names, err := p.getNamespaceProcesses(namespace)
+	if err != nil {
+		return err
+	}
+
+	log.Info().Msgf("Starting namespace: %s", namespace)
+	var errs []error
+	for _, name := range names {
+		// Check if already running to avoid error logs
+		if p.getRunningProcess(name) == nil {
+			if err := p.StartProcess(name); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to start namespace %s: %v", namespace, errs)
+	}
+	return nil
+}
+
+func (p *ProjectRunner) StopNamespace(namespace string) error {
+	names, err := p.getNamespaceProcesses(namespace)
+	if err != nil {
+		return err
+	}
+	// Reverse order for stop
+	slices.Reverse(names)
+
+	log.Info().Msgf("Stopping namespace: %s", namespace)
+
+	var errs []error
+	for _, name := range names {
+		if p.getRunningProcess(name) != nil {
+			if err := p.StopProcess(name); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to stop namespace %s: %v", namespace, errs)
+	}
+	return nil
+}
+
+func (p *ProjectRunner) RestartNamespace(namespace string) error {
+	// Determine processes first
+	names, err := p.getNamespaceProcesses(namespace)
+	if err != nil {
+		return err
+	}
+
+	// Stop them (Reverse)
+	slices.Reverse(names)
+	stopErrs := []error{}
+	for _, name := range names {
+		if p.getRunningProcess(name) != nil {
+			if err := p.StopProcess(name); err != nil {
+				stopErrs = append(stopErrs, err)
+			}
+		}
+	}
+
+	// Wait for them to stop
+	timeout := time.After(30 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+waitingForStop:
+	for {
+		select {
+		case <-timeout:
+			log.Warn().Msgf("Timeout waiting for namespace %s to stop during restart", namespace)
+			break waitingForStop
+		case <-ticker.C:
+			allStopped := true
+			for _, name := range names {
+				if p.getRunningProcess(name) != nil {
+					allStopped = false
+					break
+				}
+			}
+			if allStopped {
+				break waitingForStop
+			}
+		}
+	}
+
+	// Start them (Forward)
+	slices.Reverse(names) // Restore order
+	startErrs := []error{}
+	for _, name := range names {
+		if p.getRunningProcess(name) == nil {
+			if err := p.StartProcess(name); err != nil {
+				startErrs = append(startErrs, err)
+			}
+		}
+	}
+
+	if len(stopErrs) > 0 || len(startErrs) > 0 {
+		return fmt.Errorf("errors during restart namespace %s. Stop: %v, Start: %v", namespace, stopErrs, startErrs)
+	}
+	return nil
 }
 
 func (p *ProjectRunner) RestartProcess(name string) error {

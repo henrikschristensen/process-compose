@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -66,6 +67,7 @@ type TerminalView struct {
 	inEscapeMode bool
 	exitKey      tcell.Key
 	onEscape     func()
+	isScrolling  bool
 }
 
 func NewTerminalView(app *tview.Application) *TerminalView {
@@ -292,8 +294,22 @@ func (t *TerminalView) Draw(screen tcell.Screen) {
 
 	// Draw cursor
 	cursorX, cursorY := t.term.GetCursor()
-	if t.term.IsCursorVisible() && cursorY < height && cursorX < width {
+	if t.term.IsCursorVisible() && cursorY < height && cursorX < width && t.term.viewOffset == 0 {
 		screen.ShowCursor(x+cursorX, y+cursorY)
+	}
+
+	// Draw scrolling indicator
+	if t.term.viewOffset > 0 {
+		viewOffset, historySize := t.term.GetViewportStatus()
+		msg := fmt.Sprintf("[%d/%d]", viewOffset, historySize)
+		// Draw at top right
+		msgX := x + width - len(msg) - 1
+		msgY := y
+		if msgX > x {
+			for i, ch := range msg {
+				screen.SetContent(msgX+i, msgY, ch, nil, tcell.StyleDefault.Reverse(true))
+			}
+		}
 	}
 }
 
@@ -317,29 +333,63 @@ func (t *TerminalView) handleKeyInput(event *tcell.EventKey) {
 	}
 
 	if t.inEscapeMode {
-		if event.Key() == tcell.KeyEsc {
+		switch event.Key() {
+		case tcell.KeyUp, tcell.KeyDown, tcell.KeyPgUp, tcell.KeyPgDn, tcell.KeyHome, tcell.KeyEnd:
+			t.inEscapeMode = false
+			t.isScrolling = true
+			// Fallthrough to scrolling handler
+		case tcell.KeyEsc:
 			t.inEscapeMode = false
 			if t.onEscape != nil {
 				t.onEscape()
 			}
 			return
-		}
-		// If key is not Esc and not exitKey (handled above),
-		// we treat it as a normal sequence preceded by exitKey.
-		// So we first send the buffered exitKey.
-		t.inEscapeMode = false
+		default:
+			// Not a scrolling key, treat as normal sequence preceded by exitKey
+			t.inEscapeMode = false
 
-		// Try to send the corresponding control character for the exitKey
-		if t.pty != nil {
-			if exitBytes := t.getSpecialKeySequence(t.exitKey); len(exitBytes) > 0 {
-				_, err := t.pty.Write(exitBytes)
-				if err != nil {
-					log.Error().Err(err).Msg("Error writing to PTY")
+			// Try to send the corresponding control character for the exitKey
+			if t.pty != nil {
+				if exitBytes := t.getSpecialKeySequence(t.exitKey); len(exitBytes) > 0 {
+					_, err := t.pty.Write(exitBytes)
+					if err != nil {
+						log.Error().Err(err).Msg("Error writing to PTY")
+					}
+				} else {
+					log.Warn().Msgf("No byte sequence found for configured exit key: %v", t.exitKey)
 				}
-			} else {
-				// Fallback if no mapping (though tcell generally maps KeyCtrlX)
-				log.Warn().Msgf("No byte sequence found for configured exit key: %v", t.exitKey)
 			}
+		}
+	}
+
+	if t.isScrolling {
+		switch event.Key() {
+		case tcell.KeyEsc:
+			t.isScrolling = false
+			t.term.ResetViewport()
+			return
+		case tcell.KeyUp:
+			t.term.ScrollViewport(1)
+			return
+		case tcell.KeyDown:
+			t.term.ScrollViewport(-1)
+			return
+		case tcell.KeyPgUp:
+			t.term.ScrollViewport(t.height)
+			return
+		case tcell.KeyPgDn:
+			t.term.ScrollViewport(-t.height)
+			return
+		case tcell.KeyHome:
+			t.term.ScrollViewport(1000000) // All the way up
+			return
+		case tcell.KeyEnd:
+			t.term.ResetViewport()
+			return
+		default:
+			// Any other key exits scrolling mode and is processed normally
+			t.isScrolling = false
+			t.term.ResetViewport()
 		}
 	}
 
@@ -419,9 +469,27 @@ func (t *TerminalView) MouseHandler() func(action tview.MouseAction, event *tcel
 		case btn&tcell.Button3 != 0: // Right click
 			buttonCode = 2
 		case btn&tcell.WheelUp != 0:
-			buttonCode = 64
+			if !t.isRunning {
+				return true, nil
+			}
+			if t.term.IsMouseModeEnabled() {
+				buttonCode = 64
+				break // Continue to encoding
+			}
+			t.isScrolling = true
+			t.term.ScrollViewport(1)
+			return true, nil
 		case btn&tcell.WheelDown != 0:
-			buttonCode = 65
+			if !t.isRunning {
+				return true, nil
+			}
+			if t.term.IsMouseModeEnabled() {
+				buttonCode = 65
+				break // Continue to encoding
+			}
+			t.isScrolling = true
+			t.term.ScrollViewport(-1)
+			return true, nil
 
 		default:
 			// For movements or unsupported buttons, we consume but don't send (for now)
@@ -449,9 +517,11 @@ func (t *TerminalView) MouseHandler() func(action tview.MouseAction, event *tcel
 			byte(relY) + 33,
 		}
 
-		_, err := t.pty.Write(encoded)
-		if err != nil {
-			log.Error().Err(err).Msg("Error writing mouse event to PTY")
+		if t.term.IsMouseModeEnabled() {
+			_, err := t.pty.Write(encoded)
+			if err != nil {
+				log.Error().Err(err).Msg("Error writing mouse event to PTY")
+			}
 		}
 
 		// Ensure we get focus on click (especially left click)

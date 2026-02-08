@@ -46,6 +46,7 @@ Check the [Documentation](https://f1bonacc1.github.io/process-compose/launcher/)
 - Configurable shortcuts
 - Merge Configuration Files
 - Namespaces
+- Namespace Operations (Start, Stop, Restart via CLI and TUI)
 - Run Multiple Replicas of a Process
 - Run a Foreground Process 
 - Interactive Process 

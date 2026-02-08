@@ -346,3 +346,83 @@ func TestProjectRunner_EnvironmentExpansion(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectRunner_getNamespaceProcesses(t *testing.T) {
+	tests := []struct {
+		name      string
+		processes map[string]types.ProcessConfig
+		namespace string
+		want      []string
+		depsOrder []string
+	}{
+		{
+			name: "DefaultNamespace",
+			processes: map[string]types.ProcessConfig{
+				"p1": {Name: "p1", ReplicaName: "p1", Namespace: "default"},
+				"p2": {Name: "p2", ReplicaName: "p2", Namespace: "other"},
+				"p3": {Name: "p3", ReplicaName: "p3"}, // default implied
+			},
+			namespace: "default",
+			want:      []string{"p1", "p3"},
+			depsOrder: []string{"p1", "p2", "p3"}, // order matters
+		},
+		{
+			name: "OtherNamespace",
+			processes: map[string]types.ProcessConfig{
+				"p1": {Name: "p1", ReplicaName: "p1", Namespace: "default"},
+				"p2": {Name: "p2", ReplicaName: "p2", Namespace: "other"},
+			},
+			namespace: "other",
+			want:      []string{"p2"},
+			depsOrder: []string{"p1", "p2"},
+		},
+		{
+			name: "EmptyNamespaceSameAsDefault",
+			processes: map[string]types.ProcessConfig{
+				"p1": {Name: "p1", ReplicaName: "p1", Namespace: "default"},
+			},
+			namespace: "",
+			want:      []string{"p1"},
+			depsOrder: []string{"p1"},
+		},
+		{
+			name: "RespectDependencyOrder",
+			processes: map[string]types.ProcessConfig{
+				"p1": {Name: "p1", ReplicaName: "p1", Namespace: "ns1"},
+				"p2": {Name: "p2", ReplicaName: "p2", Namespace: "ns1", DependsOn: types.DependsOnConfig{"p1": {}}},
+			},
+			namespace: "ns1",
+			want:      []string{"p1", "p2"},
+			depsOrder: []string{"p1", "p2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &types.Project{
+				Processes: tt.processes,
+			}
+
+			runner := &ProjectRunner{
+				project: p,
+			}
+
+			got, err := runner.getNamespaceProcesses(tt.namespace)
+			if err != nil {
+				t.Fatalf("getNamespaceProcesses error: %v", err)
+			}
+
+			gotMap := make(map[string]bool)
+			wantMap := make(map[string]bool)
+			for _, g := range got {
+				gotMap[g] = true
+			}
+			for _, w := range tt.want {
+				wantMap[w] = true
+			}
+			if !reflect.DeepEqual(gotMap, wantMap) {
+				t.Errorf("getNamespaceProcesses() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -13,8 +13,9 @@ import (
 )
 
 type attentionMessage struct {
-	text     string
-	duration time.Duration
+	text            string
+	duration        time.Duration
+	isMoreAttention bool
 }
 
 func (pv *pcView) createStatTable() *tview.Table {
@@ -81,37 +82,42 @@ func (pv *pcView) getProjectName() string {
 // attentionMessage shows an attention message in the status table
 // It will disappear after the specified duration.
 // duration == 0 will not hide the message
-func (pv *pcView) attentionMessage(message string, duration time.Duration) {
-    pv.attentionMessages <- attentionMessage{
-        text:     message,
-        duration: duration,
-    }
+func (pv *pcView) attentionMessage(message string, duration time.Duration, isMoreAttention bool) {
+	pv.attentionMessages <- attentionMessage{
+		text:            message,
+		duration:        duration,
+		isMoreAttention: isMoreAttention,
+	}
 }
 
 func (pv *pcView) startAttentionsMessageRoutine() {
-    for {
+	for {
 		select {
 		case msg := <-pv.attentionMessages:
-            if pv.attentionCancel != nil {
-                pv.attentionCancel()
-            }
-            ctx, cancel := context.WithTimeout(pv.ctxApp, msg.duration)
-            pv.attentionCancel = cancel
-			go pv.showAttentionMessage(ctx, msg.text, msg.duration)
+			if pv.attentionCancel != nil {
+				pv.attentionCancel()
+			}
+			ctx, cancel := context.WithTimeout(pv.ctxApp, msg.duration)
+			pv.attentionCancel = cancel
+			go pv.showAttentionMessage(ctx, msg.text, msg.duration, msg.isMoreAttention)
 		case <-pv.ctxApp.Done():
 			return
 		}
 	}
 }
 
-func (pv *pcView) showAttentionMessage(ctx context.Context, message string, duration time.Duration) {
+func (pv *pcView) showAttentionMessage(ctx context.Context, message string, duration time.Duration, isMoreAttention bool) {
+	backgroundColor := tview.Styles.ContrastBackgroundColor
+	if isMoreAttention {
+		backgroundColor = tview.Styles.MoreContrastBackgroundColor
+	}
 	pv.appView.QueueUpdateDraw(func() {
 		pv.statTable.SetCell(0, 2, tview.NewTableCell(message).
 			SetSelectable(false).
 			SetAlign(tview.AlignCenter).
 			SetExpansion(0).
 			SetTextColor(tview.Styles.ContrastSecondaryTextColor).
-			SetBackgroundColor(tview.Styles.MoreContrastBackgroundColor))
+			SetBackgroundColor(backgroundColor))
 	})
 	if duration == 0 {
 		return
@@ -120,6 +126,9 @@ func (pv *pcView) showAttentionMessage(ctx context.Context, message string, dura
 	pv.hideAttentionMessage()
 }
 
+// showAutoProgress displays an animated progress bar in the status table.
+// The progress bar will be updated until the context is cancelled.
+// duration is used to calculate the speed of the animation.
 func (pv *pcView) showAutoProgress(ctx context.Context, duration time.Duration) {
 	if duration == 0 {
 		return

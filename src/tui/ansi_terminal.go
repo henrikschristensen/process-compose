@@ -52,6 +52,14 @@ type AnsiTerminal struct {
 	scrollTop    int
 	scrollBottom int
 
+	// History buffer
+	history     [][]Cell
+	historySize int
+	viewOffset  int
+
+	// Mouse mode state
+	mouseModeEnabled bool
+
 	// Callback for sending responses back to the PTY
 	responseCallback func([]byte)
 }
@@ -75,6 +83,8 @@ func NewAnsiTerminal(width, height int) *AnsiTerminal {
 		scrollTop:     0,
 		scrollBottom:  height - 1,
 		utf8Buffer:    make([]byte, 0, 4),
+		history:       make([][]Cell, 0, 10000),
+		historySize:   10000,
 	}
 	t.cells = make([][]Cell, height)
 	for i := range t.cells {
@@ -653,6 +663,24 @@ func (t *AnsiTerminal) scrollUp() {
 		return
 	}
 
+	// Save to history if we are scrolling the entire screen (scrollTop == 0)
+	// and not using alternate screen
+	if t.scrollTop == 0 && !t.useAltScreen {
+		// Deep copy the line being scrolled out
+		line := make([]Cell, t.width)
+		copy(line, t.cells[0])
+		t.history = append(t.history, line)
+		if len(t.history) > t.historySize {
+			t.history = t.history[1:]
+		}
+
+		// Adjust viewOffset if we are currently viewing history
+		// so that the view remains stable relative to the content
+		if t.viewOffset > 0 {
+			t.viewOffset++
+		}
+	}
+
 	// Move lines up
 	for i := t.scrollTop; i < t.scrollBottom; i++ {
 		copy(t.cells[i], t.cells[i+1])
@@ -723,15 +751,95 @@ func (t *AnsiTerminal) eraseLine(mode int) {
 	}
 }
 
-// GetCell returns the cell at the given position
+// GetCell returns the cell at the given position taking viewOffset into account
 func (t *AnsiTerminal) GetCell(x, y int) Cell {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	if y >= 0 && y < t.height && x >= 0 && x < t.width {
-		return t.cells[y][x]
+	// If using alternate screen, ignore history/viewport
+	if t.useAltScreen {
+		if y >= 0 && y < t.height && x >= 0 && x < t.width {
+			return t.cells[y][x]
+		}
+		return Cell{Char: ' ', Style: tcell.StyleDefault}
 	}
+
+	// Calculate adjusted Y position based on `viewOffset`
+	// viewOffset = 0 -> bottom (live)
+
+	if t.viewOffset == 0 {
+		if y >= 0 && y < t.height && x >= 0 && x < t.width {
+			return t.cells[y][x]
+		}
+		return Cell{Char: ' ', Style: tcell.StyleDefault}
+	}
+
+	// When viewOffset > 0:
+	// The "visible" screen is shifted up by viewOffset.
+	// We want to find which line corresponds to screen row 'y'.
+	// logicalRow = y - viewOffset
+	// If logicalRow >= 0, it falls within the *current* t.cells (live screen)
+	// If logicalRow < 0, it falls within history
+
+	logicalRow := y - t.viewOffset
+
+	if logicalRow >= 0 {
+		if logicalRow < t.height && x >= 0 && x < t.width {
+			return t.cells[logicalRow][x]
+		}
+	} else {
+		// Index into history
+		historyIndex := len(t.history) + logicalRow
+		if historyIndex >= 0 && historyIndex < len(t.history) {
+			line := t.history[historyIndex]
+			if x >= 0 && x < len(line) {
+				return line[x]
+			}
+		}
+	}
+
 	return Cell{Char: ' ', Style: tcell.StyleDefault}
+}
+
+// ScrollViewport adjusts the view offset
+func (t *AnsiTerminal) ScrollViewport(delta int) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if t.useAltScreen {
+		return
+	}
+
+	t.viewOffset += delta
+
+	// Bounds checking
+	if t.viewOffset < 0 {
+		t.viewOffset = 0
+	}
+
+	// Max scroll: ensure we don't scroll past the top of history
+	// Top of screen (y=0) corresponds to logicalRow = -viewOffset
+	// Smallest logicalRow we have is -len(history)
+	// So -viewOffset >= -len(history)  =>  viewOffset <= len(history)
+	// Actually we probably want to allow scrolling until the bottom history line is at the top?
+	// Let's stick to: can't scroll past top of history.
+	if t.viewOffset > len(t.history) {
+		t.viewOffset = len(t.history)
+	}
+}
+
+// ResetViewport resets the view offset to 0 (bottom)
+func (t *AnsiTerminal) ResetViewport() {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	t.viewOffset = 0
+}
+
+// GetViewportStatus returns current offset and history size
+func (t *AnsiTerminal) GetViewportStatus() (int, int) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	return t.viewOffset, len(t.history)
 }
 
 // GetCursor returns the current cursor position
@@ -832,11 +940,14 @@ func (t *AnsiTerminal) handleSetMode(params []int) {
 		switch p {
 		case 25: // Show cursor
 			t.cursorVisible = true
+		case 1000, 1002, 1003: // Mouse reporting modes
+			t.mouseModeEnabled = true
 		case 1049: // Enable alternate screen buffer
 			if !t.useAltScreen {
 				t.switchToAltScreen()
 			}
 		}
+
 	}
 }
 
@@ -845,6 +956,8 @@ func (t *AnsiTerminal) handleResetMode(params []int) {
 		switch p {
 		case 25: // Hide cursor
 			t.cursorVisible = false
+		case 1000, 1002, 1003: // Mouse reporting modes
+			t.mouseModeEnabled = false
 		case 1049: // Disable alternate screen buffer
 			if t.useAltScreen {
 				t.switchToMainScreen()
@@ -906,4 +1019,10 @@ func (t *AnsiTerminal) handleOSC(b byte) {
 		t.parseState = stateNormal
 	}
 	// Otherwise ignore content of OSC sequence
+}
+
+func (t *AnsiTerminal) IsMouseModeEnabled() bool {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	return t.mouseModeEnabled
 }

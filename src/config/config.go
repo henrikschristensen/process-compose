@@ -85,6 +85,8 @@ var (
 		"project",
 		"list",
 		"ls",
+		"namespace",
+		"ns",
 		"--detached-with-tui",
 	}
 )

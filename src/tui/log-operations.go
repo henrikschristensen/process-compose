@@ -64,7 +64,7 @@ func (pv *pcView) followLog(name string) {
 	}
 	pv.logsText.useAnsi = !config.DisableAnsiColors
 	if err = pv.project.GetLogsAndSubscribe(name, pv.logsText); err != nil {
-		pv.attentionMessage(fmt.Sprintf("Couldn't subscribe to the process logs: %s", err.Error()), 5*time.Second)
+		pv.attentionMessage(fmt.Sprintf("Couldn't subscribe to the process logs: %s", err.Error()), 5*time.Second, true)
 		return
 	}
 	pv.logsText.ScrollToEnd()
@@ -104,7 +104,7 @@ func (pv *pcView) createLogSelectionTextArea() {
 			err := glippy.Set(text)
 			if err != nil {
 				log.Err(err).Msg("failed to set clipboard")
-                pv.attentionMessage(fmt.Sprintf("Failed to copy to clipboard: %s", err.Error()), 5*time.Second)
+				pv.attentionMessage(fmt.Sprintf("Failed to copy to clipboard: %s", err.Error()), 5*time.Second, true)
 			}
 			pv.logsTextArea.Select(start, start)
 		case tcell.KeyEsc:

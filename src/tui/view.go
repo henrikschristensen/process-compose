@@ -292,6 +292,15 @@ func (pv *pcView) setShortCutsActions() {
 		pv.showPassIfNeeded()
 	})
 	pv.shortcuts.setAction(ActionDependencyGraph, pv.showGraphDialog)
+	pv.shortcuts.setAction(ActionNamespaceOps, func() {
+		modal := newNamespaceModal(pv)
+		height := modal.Height()
+		_, _, _, screenHeight := pv.pages.GetRect()
+		if height > screenHeight/2 {
+			height = screenHeight / 2
+		}
+		pv.showDialog(modal, 80, height)
+	})
 }
 
 func (pv *pcView) setFullScreen(isFullScreen bool) {
@@ -455,9 +464,9 @@ func (pv *pcView) showGraphDialog() {
 
 func (pv *pcView) handleShutDown() {
 	if pv.project.IsRemote() {
-		pv.attentionMessage("Detaching...", 0)
+		pv.attentionMessage("Detaching...", 0, true)
 	} else {
-		pv.attentionMessage("Shutting Down...", 0)
+		pv.attentionMessage("Shutting Down...", 0, true)
 		_ = pv.project.ShutDownProject()
 	}
 	pv.stopFollowLog()
@@ -473,7 +482,7 @@ func (pv *pcView) handleConnectivityError() {
 	if pv.project.IsRemote() {
 		errSecs := pv.project.ErrorForSecs()
 		if errSecs > 0 {
-			pv.attentionMessage(fmt.Sprintf("Reconnecting... Terminating in %d sec", shutDownAfterSec-errSecs), 0)
+			pv.attentionMessage(fmt.Sprintf("Reconnecting... Terminating in %d sec", shutDownAfterSec-errSecs), 0, true)
 		}
 		if errSecs >= shutDownAfterSec {
 			pv.handleShutDown()

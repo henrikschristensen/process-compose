@@ -132,6 +132,18 @@ func (p *PcClient) RestartProcess(name string) error {
 	return p.restartProcess(name)
 }
 
+func (p *PcClient) StartNamespace(name string) error {
+	return p.startNamespace(name)
+}
+
+func (p *PcClient) StopNamespace(name string) error {
+	return p.stopNamespace(name)
+}
+
+func (p *PcClient) RestartNamespace(name string) error {
+	return p.restartNamespace(name)
+}
+
 func (p *PcClient) ScaleProcess(name string, scale int) error {
 	return p.scaleProcess(name, scale)
 }
@@ -197,4 +209,8 @@ func (p *PcClient) GetFullProcessEnvironment(proc *types.ProcessConfig) []string
 
 func (p *PcClient) GetDependencyGraph() (*types.DependencyGraph, error) {
 	return p.getDependencyGraph()
+}
+
+func (p *PcClient) GetNamespaces() ([]string, error) {
+	return p.getNamespaces()
 }

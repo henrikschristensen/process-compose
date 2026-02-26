@@ -190,7 +190,7 @@ func (p *ProjectRunner) runProcess(config *types.ProcessConfig) {
 	procState, _ := p.GetProcessState(config.ReplicaName)
 	isMain := config.Name == p.mainProcess
 	hasMain := p.mainProcess != ""
-	printLogs := !hasMain && !p.isTuiOn
+	printLogs := !hasMain && !p.isTuiOn && !p.project.MCPServer.IsStdio()
 	extraArgs := []string{}
 	if isMain {
 		extraArgs = p.mainProcessArgs
@@ -208,7 +208,7 @@ func (p *ProjectRunner) runProcess(config *types.ProcessConfig) {
 		withPrintLogs(printLogs),
 		withIsMain(isMain),
 		withExtraArgs(extraArgs),
-		withLogsTruncate(p.truncateLogs),
+		withLogsTruncate(p.truncateLogs || config.TruncateLog),
 		withRefRate(p.refRate),
 		withRecursiveMetrics(p.withRecursiveMetrics),
 		withProcessTree(p.processTree),
@@ -727,6 +727,19 @@ func (p *ProjectRunner) GetProcessInfo(name string) (*types.ProcessConfig, error
 	} else {
 		return nil, fmt.Errorf("no such process: %s", name)
 	}
+}
+
+func (p *ProjectRunner) SetProcessInfo(config *types.ProcessConfig) error {
+	p.runProcMutex.Lock()
+	defer p.runProcMutex.Unlock()
+	if config.Name == "" {
+		return fmt.Errorf("process name is required")
+	}
+	if config.Namespace == "" {
+		config.Namespace = types.DefaultNamespace
+	}
+	p.project.Processes[config.Name] = *config
+	return nil
 }
 
 func (p *ProjectRunner) GetProcessPorts(name string) (*types.ProcessPorts, error) {

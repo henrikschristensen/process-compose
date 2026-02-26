@@ -23,40 +23,43 @@ type (
 	Environment   []string
 	EnvCmd        map[string]string
 	ProcessConfig struct {
-		Name              string                 `yaml:",omitempty"`
-		Disabled          bool                   `yaml:"disabled,omitempty"`
-		IsDaemon          bool                   `yaml:"is_daemon,omitempty"`
-		Command           string                 `yaml:"command,omitempty"`
-		Entrypoint        []string               `yaml:"entrypoint,omitempty"`
-		LogLocation       string                 `yaml:"log_location,omitempty"`
-		LoggerConfig      *LoggerConfig          `yaml:"log_configuration,omitempty"`
-		Environment       Environment            `yaml:"environment,omitempty"`
-		RestartPolicy     RestartPolicyConfig    `yaml:"availability,omitempty"`
-		DependsOn         DependsOnConfig        `yaml:"depends_on,omitempty"`
-		LivenessProbe     *health.Probe          `yaml:"liveness_probe,omitempty"`
-		ReadinessProbe    *health.Probe          `yaml:"readiness_probe,omitempty"`
-		ReadyLogLine      string                 `yaml:"ready_log_line,omitempty"`
-		ShutDownParams    ShutDownParams         `yaml:"shutdown,omitempty"`
-		DisableAnsiColors bool                   `yaml:"disable_ansi_colors,omitempty"`
-		WorkingDir        string                 `yaml:"working_dir,omitempty"`
-		Namespace         string                 `yaml:"namespace,omitempty"`
-		Replicas          int                    `yaml:"replicas,omitempty"`
-		Extensions        map[string]interface{} `yaml:",inline"`
-		Description       string                 `yaml:"description,omitempty"`
-		Vars              Vars                   `yaml:"vars,omitempty"`
-		IsForeground      bool                   `yaml:"is_foreground,omitempty"`
-		IsTty             bool                   `yaml:"is_tty,omitempty"`
-		IsElevated        bool                   `yaml:"is_elevated,omitempty"`
-		IsInteractive     bool                   `yaml:"is_interactive,omitempty"`
-		LaunchTimeout     int                    `yaml:"launch_timeout_seconds,omitempty"`
-		IsDisabled        string                 `yaml:"is_disabled,omitempty"`
-		DisableDotEnv     bool                   `yaml:"is_dotenv_disabled,omitempty"`
-		OriginalConfig    string                 `yaml:"original_config,omitempty"`
-		ReplicaNum        int                    `yaml:"replica_num,omitempty"`
-		ReplicaName       string                 `yaml:"replica_name,omitempty"`
-		Executable        string                 `yaml:"executable,omitempty"`
-		Args              []string               `yaml:"args,omitempty"`
-		Schedule          *ScheduleConfig        `yaml:"schedule,omitempty"`
+		Name                    string                 `yaml:",omitempty"`
+		Disabled                bool                   `yaml:"disabled,omitempty"`
+		IsDaemon                bool                   `yaml:"is_daemon,omitempty"`
+		Command                 string                 `yaml:"command,omitempty"`
+		Entrypoint              []string               `yaml:"entrypoint,omitempty"`
+		LogLocation             string                 `yaml:"log_location,omitempty"`
+		LoggerConfig            *LoggerConfig          `yaml:"log_configuration,omitempty"`
+		Environment             Environment            `yaml:"environment,omitempty"`
+		RestartPolicy           RestartPolicyConfig    `yaml:"availability,omitempty"`
+		DependsOn               DependsOnConfig        `yaml:"depends_on,omitempty"`
+		LivenessProbe           *health.Probe          `yaml:"liveness_probe,omitempty"`
+		ReadinessProbe          *health.Probe          `yaml:"readiness_probe,omitempty"`
+		ReadyLogLine            string                 `yaml:"ready_log_line,omitempty"`
+		ShutDownParams          ShutDownParams         `yaml:"shutdown,omitempty"`
+		DisableAnsiColors       bool                   `yaml:"disable_ansi_colors,omitempty"`
+		WorkingDir              string                 `yaml:"working_dir,omitempty"`
+		Namespace               string                 `yaml:"namespace,omitempty"`
+		Replicas                int                    `yaml:"replicas,omitempty"`
+		Extensions              map[string]interface{} `yaml:",inline"`
+		Description             string                 `yaml:"description,omitempty"`
+		Vars                    Vars                   `yaml:"vars,omitempty"`
+		IsForeground            bool                   `yaml:"is_foreground,omitempty"`
+		IsTty                   bool                   `yaml:"is_tty,omitempty"`
+		IsElevated              bool                   `yaml:"is_elevated,omitempty"`
+		IsInteractive           bool                   `yaml:"is_interactive,omitempty"`
+		LaunchTimeout           int                    `yaml:"launch_timeout_seconds,omitempty"`
+		IsDisabled              string                 `yaml:"is_disabled,omitempty"`
+		DisableDotEnv           bool                   `yaml:"is_dotenv_disabled,omitempty"`
+		OriginalConfig          string                 `yaml:"original_config,omitempty"`
+		ReplicaNum              int                    `yaml:"replica_num,omitempty"`
+		ReplicaName             string                 `yaml:"replica_name,omitempty"`
+		Executable              string                 `yaml:"executable,omitempty"`
+		Args                    []string               `yaml:"args,omitempty"`
+		Schedule                *ScheduleConfig        `yaml:"schedule,omitempty"`
+		MCP                     *MCPProcessConfig      `yaml:"mcp,omitempty"`
+		TruncateLog             bool                   `yaml:"truncate_log,omitempty"`
+		DisableCommandRendering bool                   `yaml:"is_template_disabled,omitempty"`
 	}
 )
 
@@ -81,6 +84,21 @@ func (p *ProcessConfig) CalculateReplicaName() string {
 
 func (p *ProcessConfig) IsDeferred() bool {
 	return p.IsForeground || p.Disabled
+}
+
+// IsMCP returns true if this process is MCP-enabled
+func (p *ProcessConfig) IsMCP() bool {
+	return p.MCP != nil
+}
+
+// IsMCPTool returns true if this is an MCP tool
+func (p *ProcessConfig) IsMCPTool() bool {
+	return p.MCP != nil && p.MCP.IsTool()
+}
+
+// IsMCPResource returns true if this is an MCP resource
+func (p *ProcessConfig) IsMCPResource() bool {
+	return p.MCP != nil && p.MCP.IsResource()
 }
 
 // Compare returns true if two process configs are equal

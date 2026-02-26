@@ -18,6 +18,8 @@ import (
 	"github.com/f1bonacc1/process-compose/src/client"
 	"github.com/f1bonacc1/process-compose/src/config"
 	"github.com/f1bonacc1/process-compose/src/loader"
+	"github.com/f1bonacc1/process-compose/src/mcp"
+	"github.com/f1bonacc1/process-compose/src/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -39,6 +41,7 @@ var (
 			}
 			pcFlags.PcThemeChanged = cmd.Flags().Changed(flagTheme)
 			pcFlags.SortColumnChanged = cmd.Flags().Changed(flagSort)
+			config.CliApiTokenPath = *pcFlags.ApiTokenPath
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			runProjectCmd([]string{})
@@ -47,11 +50,29 @@ var (
 	}
 )
 
+var (
+	// Saved standard streams for MCP stdio transport
+	savedStdin  io.Reader = os.Stdin
+	savedStdout io.Writer = os.Stdout
+	isMCPStdio  bool      = false
+)
+
 func runProjectCmd(args []string) {
 	defer func() {
 		_ = logFile.Close()
 	}()
-	runner := getProjectRunner(args, *pcFlags.NoDependencies, "", []string{})
+
+	// First pass to check for MCP stdio mode
+	runner, project := getProjectRunner(args, *pcFlags.NoDependencies, "", []string{})
+
+	// Check if MCP stdio is enabled
+	if project != nil && project.MCPServer.IsStdio() {
+		isMCPStdio = true
+		// Hijack Stdout: redirect os.Stdout to os.Stderr
+		// This ensures any fmt.Printf goes to stderr
+		os.Stdout = os.Stderr
+	}
+
 	if opts.DryRun {
 		processNames, _ := runner.GetLexicographicProcessNames()
 		fmt.Printf("Validated %d configured processes from %d files.\n", len(processNames), len(opts.FileNames)+len(opts.EnvFileNames))
@@ -61,7 +82,7 @@ func runProjectCmd(args []string) {
 		//placing it here ensures that if the compose.yaml is invalid, the program will exit immediately
 		runInDetachedMode()
 	}
-	err := waitForProjectAndServer(!*pcFlags.IsTuiEnabled, runner)
+	err := waitForProjectAndServer(!*pcFlags.IsTuiEnabled, runner, project)
 	handleErrorAndExit(err)
 }
 
@@ -104,6 +125,7 @@ func init() {
 	rootCmd.Flags().BoolVar(pcFlags.LogsTruncate, "logs-truncate", *pcFlags.LogsTruncate, "truncate process logs buffer on startup")
 	rootCmd.Flags().BoolVar(pcFlags.WithRecursiveMetrics, "recursive-metrics", *pcFlags.WithRecursiveMetrics, "collect metrics recursively (env: "+config.EnvVarWithRecursiveMetrics+")")
 	rootCmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "validate the config and exit")
+	rootCmd.PersistentFlags().StringVar(pcFlags.ApiTokenPath, "token-file", *pcFlags.ApiTokenPath, "path to a file containing the API token (env: "+config.EnvVarApiTokenPath+")")
 	rootCmd.Flags().AddFlag(commonFlags.Lookup(flagReverse))
 	rootCmd.Flags().AddFlag(commonFlags.Lookup(flagSort))
 	rootCmd.Flags().AddFlag(commonFlags.Lookup(flagTheme))
@@ -191,7 +213,23 @@ func startHttpServerIfEnabled(useLogger bool, runner *app.ProjectRunner) (*http.
 	return nil, nil
 }
 
-func waitForProjectAndServer(useLogger bool, runner *app.ProjectRunner) error {
+func waitForProjectAndServer(useLogger bool, runner *app.ProjectRunner, project *types.Project) error {
+	// Create and start MCP server if enabled
+	mcpManager := mcp.NewMCPManager(runner, project.MCPServer, project.Processes)
+
+	if isMCPStdio {
+		mcpManager.SetStdio(savedStdin, savedStdout)
+	}
+
+	if err := mcpManager.Start(); err != nil {
+		return err
+	}
+
+	// Keep project running if MCP server is active, so we don't exit if all processes are disabled/MCP
+	if mcpManager != nil {
+		*pcFlags.KeepProjectOn = true
+	}
+
 	server, err := startHttpServerIfEnabled(useLogger, runner)
 	if err != nil {
 		return err
@@ -200,6 +238,12 @@ func waitForProjectAndServer(useLogger bool, runner *app.ProjectRunner) error {
 	if err = runProject(runner); err != nil {
 		return err
 	}
+
+	// Stop MCP server
+	if err := mcpManager.Stop(); err != nil {
+		log.Error().Err(err).Msg("Failed to stop MCP server")
+	}
+
 	if server != nil {
 		shutdownTimeout := 5 * time.Second
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)

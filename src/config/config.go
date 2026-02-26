@@ -65,6 +65,9 @@ var (
 )
 
 const (
+	EnvVarApiToken     = "PC_API_TOKEN"
+	EnvVarApiTokenPath = "PC_API_TOKEN_PATH"
+	TokenHeader        = "X-PC-Token-Key"
 	pcConfigEnv        = "PROC_COMP_CONFIG"
 	LogPathEnvVarName  = "PC_LOG_FILE"
 	LogLevelEnvVarName = "PC_LOG_LEVEL"
@@ -89,6 +92,10 @@ var (
 		"ns",
 		"--detached-with-tui",
 	}
+)
+
+var (
+	CliApiTokenPath string
 )
 
 func GetLogFilePath() string {
@@ -117,6 +124,40 @@ func GetLogLevel() zerolog.Level {
 		}
 	}
 	return zerolog.InfoLevel
+}
+
+func GetApiToken() string {
+	val, found := os.LookupEnv(EnvVarApiToken)
+	if found && val != "" {
+		return val
+	}
+
+	tokenPath := GetApiTokenPath()
+	if tokenPath != "" {
+		data, err := os.ReadFile(tokenPath)
+		if err != nil {
+			log.Error().Err(err).Msgf("Failed to read token from file: %s", tokenPath)
+			return ""
+		}
+		return strings.TrimSpace(string(data))
+	}
+
+	return ""
+}
+
+func GetApiTokenPath() string {
+	if CliApiTokenPath != "" {
+		return CliApiTokenPath
+	}
+	return getApiTokenPathDefault()
+}
+
+func getApiTokenPathDefault() string {
+	val, found := os.LookupEnv(EnvVarApiTokenPath)
+	if found {
+		return val
+	}
+	return ""
 }
 
 func getDisableTuiDefault() bool {

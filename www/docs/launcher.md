@@ -5,10 +5,10 @@
 ```yaml
 processes:
   process1:
-  	description: This process will sleep for 2 seconds
+   description: This process will sleep for 2 seconds
     command: "sleep 2"
   process2:
-  	description: This process will sleep for 3 seconds
+   description: This process will sleep for 3 seconds
     command: "sleep 3"
 ```
 
@@ -40,6 +40,57 @@ processes:
     command: "sleep 2"
     log_location: ./log_file.{PC_REPLICA_NUM}.log  # <- {PC_REPLICA_NUM} will be replaced with replica number. If more than one replica and PC_REPLICA_NUM is not specified, the replica number will be concatenated to the file end.
     replicas: 2
+```
+
+When replicas are present (`processes.process_name.replicas > 1`), other processes can depend on the group (`process-name`) or specific replicas (`process-name-N` where `N` is a value between 0 and the number of `replicas` minus one).
+
+```yaml
+processes:
+  consumer:
+    command: "/some/binary"
+    replicas: 2
+
+  # Older versions (<= v1.110.0) require the dependencies to be manually expanded
+  producer:
+    command: "/some/other/binary"
+    depends_on:
+      consumer-0:
+        condition: process_healthy
+      consumer-1:
+        condition: process_healthy
+```
+
+```yaml
+processes:
+  consumer:
+    command: "/some/binary"
+    replicas: 2
+
+  # Newer versions (> v1.110.0) allow the group name to be used directly
+  producer:
+    command: "/some/other/binary"
+    depends_on:
+      consumer:
+        condition: process_healthy
+```
+
+```yaml
+processes:
+  consumer:
+    command: "/some/binary"
+    replicas: 2
+
+  # Also we can set conditions for each instance in the group independently
+  producer:
+    command: "/some/other/binary"
+    depends_on:
+      # set the defaults for the group
+      consumer:
+        condition: process_healthy
+
+      # override a single instance
+      consumer-0:
+        condition: process_started
 ```
 
 To scale a process on the fly CLI:
@@ -74,6 +125,7 @@ processes:
       process4:
         condition: process_completed_successfully
 ```
+
 > :bulb: You can visualize your process dependencies using the [Dependency Graph](graph.md).
 
 There are 5 condition types that can be used in process dependencies:
@@ -91,16 +143,16 @@ In some situations a process's log output is a simple way to determine if it is 
 ```yaml hl_lines="6 12"
 processes:
   world:
-  	command: "echo Connected"
+   command: "echo Connected"
     depends_on:
       hello:
         condition: process_log_ready
   hello:
-  	command: |
-  	  echo 'Preparing...'
+   command: |
+     echo 'Preparing...'
       sleep 1
       echo 'I am ready to accept connections now'
-    ready_log_line: "ready to accept connections" # equal to *.ready to accept connections.*\n regex    
+    ready_log_line: "ready to accept connections" # equal to *.ready to accept connections.*\n regex
 ```
 
 > :bulb: `ready_log_line` and readiness probe are incompatible and can't be used at the same time.
@@ -149,8 +201,6 @@ process-compose up process1 process3 --no-deps # will run 'process1', 'process3'
 #Hi from Process1
 ```
 
-
-
 ## Termination Parameters
 
 ```yaml
@@ -166,7 +216,7 @@ processes:
 
 `shutdown` is optional and can be omitted. The default behavior in this case: `SIGTERM` is issued to the process group of the running process.
 
-In case only `shutdown.signal` is defined `[1..31] ` the running process group will be terminated with its value.
+In case only `shutdown.signal` is defined `[1..31]` the running process group will be terminated with its value.
 
 If `shutdown.parent_only` is yes, the signal is only sent to the running process and not to the whole process group.
 
@@ -208,6 +258,7 @@ processes:
     command: "vim process-compose.yaml"
     is_foreground: true
 ```
+
 Foreground processes are useful for cases when a full `tty` access is required (e.g. `vim`, `top`, `gdb -tui`)
 
 1. Foreground process have to be started manually (`F7`). They can be started multiple times.
@@ -274,8 +325,10 @@ processes:
       # exit_on_end implies it.
       exit_on_end: true
     depends_on:
-      redis: process_healthy
-      postgres: process_healthy
+      redis:
+        condition: process_healthy
+      postgres:
+        condition: process_healthy
 
   redis:
     command: redis-start

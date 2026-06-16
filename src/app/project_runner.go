@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/f1bonacc1/process-compose/src/command"
@@ -65,7 +66,8 @@ type ProjectRunner struct {
 	withRecursiveMetrics bool
 	procCompleteChannel  chan int
 	processTree          *ProcessTree
-	processScheduler     *scheduler.Scheduler
+	processScheduler     atomic.Pointer[scheduler.Scheduler]
+	stateBroadcaster     *ProcessStateBroadcaster
 }
 
 // RestartCall represents an in-flight restart operation
@@ -83,6 +85,47 @@ func (p *ProjectRunner) init() {
 	p.initProcessLogs()
 	p.initRestartCoalescing()
 	p.processTree = NewProcessTree(p.refRate)
+	p.stateBroadcaster = NewProcessStateBroadcaster(p.snapshotProcessStates)
+}
+
+// snapshotProcessStates returns the current state of every process. Used by
+// the state broadcaster to deliver an initial snapshot to new subscribers.
+// Errors from per-process lookups are logged and the offending process is
+// skipped so the snapshot remains best-effort consistent.
+func (p *ProjectRunner) snapshotProcessStates() []types.ProcessState {
+	states, err := p.GetProcessesState()
+	if err != nil || states == nil {
+		log.Err(err).Msg("Failed to snapshot process states for broadcaster")
+		return nil
+	}
+	return states.States
+}
+
+// RegisterStateObserver registers an observer that receives an initial
+// snapshot of every process followed by every state change.
+func (p *ProjectRunner) RegisterStateObserver(o types.StateObserver) {
+	if p.stateBroadcaster == nil {
+		return
+	}
+	p.stateBroadcaster.SubscribeWithSnapshot(o)
+}
+
+// UnregisterStateObserver stops delivery to the given observer.
+func (p *ProjectRunner) UnregisterStateObserver(o types.StateObserver) {
+	if p.stateBroadcaster == nil {
+		return
+	}
+	p.stateBroadcaster.Unsubscribe(o)
+}
+
+// publishProcessState is the publish callback injected into each Process. It
+// is safe to call before the broadcaster has been wired up (during early
+// initialization) — events are simply dropped.
+func (p *ProjectRunner) publishProcessState(ev types.ProcessStateEvent) {
+	if p.stateBroadcaster == nil {
+		return
+	}
+	p.stateBroadcaster.Publish(ev)
 }
 
 func (p *ProjectRunner) Run() error {
@@ -101,7 +144,7 @@ func (p *ProjectRunner) Run() error {
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("failed to build project run order: %e", err)
+		return fmt.Errorf("failed to build project run order: %w", err)
 	}
 	var nameOrder []string
 	for _, v := range runOrder {
@@ -118,24 +161,25 @@ func (p *ProjectRunner) Run() error {
 	log.Debug().Msgf("Spinning up %d processes. Order: %q", len(runOrder), nameOrder)
 
 	// Initialize and start scheduler for scheduled processes
-	p.processScheduler, err = scheduler.New(p)
+	sched, err := scheduler.New(p)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to create scheduler")
 	} else {
+		p.processScheduler.Store(sched)
 		for name, proc := range p.project.Processes {
 			if proc.Schedule != nil && proc.Schedule.IsScheduled() {
-				if err := p.processScheduler.AddProcess(name, proc.Schedule); err != nil {
+				if err := sched.AddProcess(name, proc.Schedule); err != nil {
 					log.Error().Err(err).Msgf("Failed to schedule process %s", name)
 				} else if proc.Disabled {
-					if err := p.processScheduler.PauseProcess(name); err != nil {
+					if err := sched.PauseProcess(name); err != nil {
 						log.Error().Err(err).Msgf("Failed to pause schedule for disabled process %s", name)
 					}
 				}
 			}
 		}
-		p.processScheduler.Start()
+		sched.Start()
 		defer func() {
-			if err := p.processScheduler.Stop(); err != nil {
+			if err := sched.Stop(); err != nil {
 				log.Error().Err(err).Msg("Failed to stop scheduler gracefully")
 			}
 		}()
@@ -161,7 +205,14 @@ func (p *ProjectRunner) Run() error {
 		case runProcCount := <-p.procCompleteChannel:
 			log.Debug().Msgf("Remaining processes: %d", runProcCount)
 			if runProcCount == 0 {
-				if p.processScheduler == nil || len(p.processScheduler.GetScheduledProcesses()) == 0 {
+				p.restartMutex.Lock()
+				pendingRestarts := len(p.restartCalls)
+				p.restartMutex.Unlock()
+				if pendingRestarts > 0 {
+					log.Debug().Msgf("Skipping project completion: %d restart(s) in progress", pendingRestarts)
+					continue
+				}
+				if s := p.processScheduler.Load(); s == nil || len(s.GetScheduledProcesses()) == 0 {
 					log.Info().Msg("Project completed")
 					p.exitCodeMutex.Lock()
 					exitCode := p.exitCode
@@ -212,6 +263,7 @@ func (p *ProjectRunner) runProcess(config *types.ProcessConfig) {
 		withRefRate(p.refRate),
 		withRecursiveMetrics(p.withRecursiveMetrics),
 		withProcessTree(p.processTree),
+		withStatePublisher(p.publishProcessState),
 	)
 	p.addRunningProcess(process)
 	go func(proc *Process) {
@@ -244,6 +296,9 @@ func (p *ProjectRunner) waitIfNeeded(process *types.ProcessConfig) error {
 						process.ReplicaName, k, exitCode)
 				}
 			case types.ProcessConditionHealthy:
+				if proc.procConf.ReadinessProbe == nil && proc.procConf.LivenessProbe == nil {
+					return fmt.Errorf("health dependency defined in '%s' but no health check exists in '%s'", process.ReplicaName, k)
+				}
 				log.Info().Msgf("%s is waiting for %s to be healthy", process.ReplicaName, k)
 				ready := proc.waitUntilReady()
 				if !ready {
@@ -273,6 +328,7 @@ func (p *ProjectRunner) onProcessEnd(exitCode int, procConf *types.ProcessConfig
 		p.exitCodeMutex.Lock()
 		p.exitCode = exitCode
 		p.exitCodeMutex.Unlock()
+		log.Info().Msgf("Process %s exited with code %d. Shutting down project...", procConf.Name, exitCode)
 		_ = p.ShutDownProject()
 	}
 }
@@ -282,6 +338,7 @@ func (p *ProjectRunner) onProcessSkipped(procConf *types.ProcessConfig) {
 		p.exitCodeMutex.Lock()
 		p.exitCode = 1
 		p.exitCodeMutex.Unlock()
+		log.Info().Msgf("Process %s skipped. Shutting down project...", procConf.Name)
 		_ = p.ShutDownProject()
 	}
 }
@@ -325,9 +382,16 @@ func (p *ProjectRunner) GetProcessState(name string) (*types.ProcessState, error
 			return nil, fmt.Errorf("can't get state of process %s: no such process", name)
 		}
 	}
+	// Add last activity time from log buffer
+	if procLog, err := p.getProcessLog(name); err == nil {
+		if t := procLog.GetLastWriteTime(); !t.IsZero() {
+			state.LastActivityTime = &t
+		}
+	}
+
 	// Add next run time for scheduled processes
-	if p.processScheduler != nil {
-		nextRun := p.processScheduler.GetNextRunTime(name)
+	if s := p.processScheduler.Load(); s != nil {
+		nextRun := s.GetNextRunTime(name)
 		state.NextRunTime = nextRun
 		if nextRun != nil {
 			if !state.IsRunning {
@@ -418,10 +482,14 @@ func (p *ProjectRunner) getDoneProcess(name string) *Process {
 }
 
 func (p *ProjectRunner) getDoneOrRunningProcess(name string) *Process {
-	if doneProc := p.getDoneProcess(name); doneProc != nil {
-		return doneProc
+	// Prefer the currently running process over a stale done entry.
+	// After UpdateProcess / Restart replaces a process, the old object lingers
+	// in doneProcesses with an already-cancelled procReadyCtx; returning it
+	// would cause downstream waitUntilReady to spuriously fail ("aborted").
+	if runningProc := p.getRunningProcess(name); runningProc != nil {
+		return runningProc
 	}
-	return p.getRunningProcess(name)
+	return p.getDoneProcess(name)
 }
 
 func (p *ProjectRunner) removeRunningProcess(process *Process) int {
@@ -441,8 +509,8 @@ func (p *ProjectRunner) StartProcess(name string) error {
 	if processConfig, ok := p.project.Processes[name]; ok {
 		p.runProcess(&processConfig)
 		// Resume schedule if it was paused (e.g. initially disabled)
-		if p.processScheduler != nil && p.processScheduler.IsScheduled(name) {
-			if err := p.processScheduler.ResumeProcess(name); err != nil {
+		if s := p.processScheduler.Load(); s != nil && s.IsScheduled(name) {
+			if err := s.ResumeProcess(name); err != nil {
 				log.Error().Err(err).Msgf("Failed to resume schedule for process %s", name)
 			}
 		}
@@ -465,7 +533,8 @@ func (p *ProjectRunner) StopProcess(name string) error {
 		}
 	} else {
 		// If not running, check if it's scheduled. If so, we'll just pause the schedule.
-		if p.processScheduler == nil || !p.processScheduler.IsScheduled(name) {
+		sched := p.processScheduler.Load()
+		if sched == nil || !sched.IsScheduled(name) {
 			if _, ok := p.project.Processes[name]; !ok {
 				log.Error().Msgf("Process %s does not exist", name)
 				return fmt.Errorf("process %s does not exist", name)
@@ -476,8 +545,8 @@ func (p *ProjectRunner) StopProcess(name string) error {
 	}
 
 	// Pause schedule if it was running or scheduled
-	if p.processScheduler != nil && p.processScheduler.IsScheduled(name) {
-		if pauseErr := p.processScheduler.PauseProcess(name); pauseErr != nil {
+	if sched := p.processScheduler.Load(); sched != nil && sched.IsScheduled(name) {
+		if pauseErr := sched.PauseProcess(name); pauseErr != nil {
 			log.Error().Err(pauseErr).Msgf("Failed to pause schedule for process %s", name)
 			if err == nil {
 				err = pauseErr
@@ -486,6 +555,20 @@ func (p *ProjectRunner) StopProcess(name string) error {
 	}
 
 	return err
+}
+
+func (p *ProjectRunner) SendSignal(name string, sig int) error {
+	log.Info().Msgf("Sending signal %d to %s", sig, name)
+	proc := p.getRunningProcess(name)
+	if proc == nil {
+		if _, ok := p.project.Processes[name]; !ok {
+			log.Error().Msgf("Process %s does not exist", name)
+			return fmt.Errorf("process %s does not exist", name)
+		}
+		log.Error().Msgf("Process %s is not running", name)
+		return fmt.Errorf("process %s is not running", name)
+	}
+	return proc.sendSignal(sig)
 }
 
 func (p *ProjectRunner) StopProcesses(names []string) (map[string]string, error) {
@@ -762,32 +845,33 @@ func (p *ProjectRunner) GetProcessPorts(name string) (*types.ProcessPorts, error
 
 func (p *ProjectRunner) SetProcessPassword(name, pass string) error {
 	p.runProcMutex.Lock()
-
-	var wg sync.WaitGroup
+	var elevatedProcs []*Process
 	for _, process := range p.runningProcesses {
 		if process.procConf.IsElevated && !process.passProvided {
-			wg.Add(1)
-			go func(process *Process) {
-				defer wg.Done()
-				err := process.setPassword(pass)
-				if err != nil {
-					log.Err(err).Msgf("failed to set password for elevated process %s", process.getName())
-				}
-			}(process)
+			elevatedProcs = append(elevatedProcs, process)
 		}
 	}
 	p.runProcMutex.Unlock()
+
+	var wg sync.WaitGroup
+	for _, process := range elevatedProcs {
+		wg.Add(1)
+		go func(process *Process) {
+			defer wg.Done()
+			err := process.setPassword(pass)
+			if err != nil {
+				log.Err(err).Msgf("failed to set password for elevated process %s", process.getName())
+			}
+		}(process)
+	}
 	wg.Wait()
-	p.runProcMutex.Lock()
-	defer p.runProcMutex.Unlock()
-	for _, process := range p.runningProcesses {
-		if process.procConf.IsElevated && process.passProvided {
+
+	for _, process := range elevatedProcs {
+		if process.passProvided {
 			return nil
 		}
 	}
-
 	return errors.New("password not accepted")
-
 }
 
 func (p *ProjectRunner) runningProcessesReverseDependencies() map[string]map[string]*Process {
@@ -1139,7 +1223,14 @@ func (p *ProjectRunner) addProcessAndRun(proc types.ProcessConfig) {
 	p.statesMutex.Lock()
 	p.processStates[proc.ReplicaName] = types.NewProcessState(&proc)
 	p.statesMutex.Unlock()
+	p.procConfMutex.Lock()
 	p.project.Processes[proc.ReplicaName] = proc
+	p.procConfMutex.Unlock()
+	// Drop any stale done entry left by a previous incarnation; otherwise
+	// new dependents would still see the old, cancelled Process object.
+	p.doneProcMutex.Lock()
+	delete(p.doneProcesses, proc.ReplicaName)
+	p.doneProcMutex.Unlock()
 	p.initProcessLog(proc.ReplicaName)
 	if !proc.IsDeferred() {
 		p.runProcess(&proc)

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +19,24 @@ import (
 	"github.com/f1bonacc1/process-compose/src/pclog"
 	"github.com/f1bonacc1/process-compose/src/types"
 )
+
+func waitForProcessState(t *testing.T, runner *ProjectRunner, name string, wantStatus string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		state, err := runner.GetProcessState(name)
+		if err != nil {
+			t.Error(err.Error())
+			return
+		}
+		if state.Status == wantStatus {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	state, _ := runner.GetProcessState(name)
+	t.Errorf("process %s: want %s, got %s (after %v)", name, wantStatus, state.Status, timeout)
+}
 
 func getFixtures() []string {
 	matches, err := filepath.Glob("../../fixtures/process-compose-*.yaml")
@@ -453,10 +470,15 @@ func TestSystem_TestProcListToRun(t *testing.T) {
 
 func TestSystem_TestProcListShutsDownInOrder(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Skipping on Windows due to bash-specific fixture (trap/sleep)")
+		t.Skip("Skipping on Windows: fixture uses bash and POSIX shell redirection")
 	}
 	fixture1 := filepath.Join("..", "..", "fixtures-code", "process-compose-shutdown-inorder.yaml")
 	t.Run("Single Proc with deps", func(t *testing.T) {
+		// The fixture's shutdown.command appends to this file. Using a fresh
+		// path per run avoids cross-test contamination; t.Setenv restores the
+		// previous value on cleanup.
+		shutdownLog := filepath.Join(t.TempDir(), "shutdown_order.log")
+		t.Setenv("PC_TEST_SHUTDOWN_LOG", shutdownLog)
 
 		project, err := loader.Load(&loader.LoaderOptions{
 			FileNames: []string{fixture1},
@@ -484,28 +506,19 @@ func TestSystem_TestProcListShutsDownInOrder(t *testing.T) {
 				t.Errorf("process %s is disabled", name)
 			}
 		}
-		file, err := os.CreateTemp(t.TempDir(), "pc_log.*.log")
-		if err != nil {
-			t.Error(err.Error())
-			return
-		}
-		defer os.Remove(file.Name())
-		project.LogLocation = file.Name()
-		project.LoggerConfig = &types.LoggerConfig{
-			FieldsOrder:     []string{"message"},
-			DisableJSON:     true,
-			TimestampFormat: "",
-			NoMetadata:      true,
-			FlushEachLine:   true,
-			NoColor:         true,
-		}
 		go func() {
 			err := runner.Run()
 			if err != nil {
 				t.Error(err.Error())
 			}
 		}()
-		time.Sleep(10 * time.Millisecond)
+		// Wait for all processes to reach Running before triggering shutdown;
+		// shutdown.command relies only on shutDown() being invoked in order, not
+		// on signal-delivery races, but we still need the runner to have started
+		// all processes before ShutDownProject is meaningful.
+		for _, name := range []string{"procA", "procB", "procC", "procD"} {
+			waitForProcessState(t, runner, name, types.ProcessStateRunning, 5*time.Second)
+		}
 		states, err := runner.GetProcessesState()
 		if err != nil {
 			t.Error(err.Error())
@@ -516,7 +529,6 @@ func TestSystem_TestProcListShutsDownInOrder(t *testing.T) {
 			t.Errorf("len(states.States) = %d, want %d", len(states.States), want)
 		}
 
-		time.Sleep(10 * time.Millisecond)
 		err = runner.ShutDownProject()
 		if err != nil {
 			t.Error(err.Error())
@@ -536,19 +548,34 @@ func TestSystem_TestProcListShutsDownInOrder(t *testing.T) {
 		if runningProcesses != want {
 			t.Errorf("runningProcesses = %d, want %d", runningProcesses, want)
 		}
-		//read file and validate the shutdown order
-		scanner := bufio.NewScanner(file)
-		order := make([]string, 0)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.Contains(line, "exit") {
-				order = append(order, line)
-			}
-		}
-		//the order if first D or C exits is not defined
+		// Read the shutdown-order file written by each process's
+		// shutdown.command. C and D shut down in parallel, so either order
+		// between them is acceptable.
 		wantOrder1 := []string{"B: exit", "D: exit", "C: exit", "A: exit"}
 		wantOrder2 := []string{"B: exit", "C: exit", "D: exit", "A: exit"}
-		if !(slices.Equal(order, wantOrder1) || slices.Equal(order, wantOrder2)) {
+
+		// Poll briefly: shutdown.command writes happen during ShutDownProject
+		// and should be on disk by now, but tolerate small fs lag on slow CI.
+		var order []string
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			data, readErr := os.ReadFile(shutdownLog)
+			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+				t.Error(readErr.Error())
+				return
+			}
+			order = order[:0]
+			for line := range strings.SplitSeq(strings.TrimRight(string(data), "\n"), "\n") {
+				if line != "" {
+					order = append(order, line)
+				}
+			}
+			if slices.Equal(order, wantOrder1) || slices.Equal(order, wantOrder2) {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if !slices.Equal(order, wantOrder1) && !slices.Equal(order, wantOrder2) {
 			t.Errorf("content = %v, want %v or %v", order, wantOrder1, wantOrder2)
 			return
 		}
@@ -611,14 +638,8 @@ func TestSystem_TestProcShutDownNoRestart(t *testing.T) {
 		return
 	}
 
-	time.Sleep(100 * time.Millisecond)
-	state, err = runner.GetProcessState(restarting)
-	if err != nil {
-		t.Error(err.Error())
-		return
-	}
-	if state.Status != types.ProcessStateCompleted {
-		t.Errorf("process %s want %s got %s", restarting, types.ProcessStateCompleted, state.Status)
+	waitForProcessState(t, runner, restarting, types.ProcessStateCompleted, 5*time.Second)
+	if t.Failed() {
 		return
 	}
 	state, err = runner.GetProcessState(notRestarting)
@@ -636,16 +657,7 @@ func TestSystem_TestProcShutDownNoRestart(t *testing.T) {
 		return
 	}
 
-	time.Sleep(100 * time.Millisecond)
-	state, err = runner.GetProcessState(notRestarting)
-	if err != nil {
-		t.Error(err.Error())
-		return
-	}
-	if state.Status != types.ProcessStateCompleted {
-		t.Errorf("process %s is running", notRestarting)
-		return
-	}
+	waitForProcessState(t, runner, notRestarting, types.ProcessStateCompleted, 5*time.Second)
 }
 func TestSystem_TestReadyLine(t *testing.T) {
 	proc1 := "proc1"
@@ -1409,6 +1421,12 @@ func TestSystem_ConcurrentRestartRaceCondition(t *testing.T) {
 		return
 	}
 
+	// The last restart may still be transitioning (Terminating → Launching →
+	// Running). Wait briefly for the post-restart state to stabilize instead of
+	// racing it — on slower runners (e.g. macOS) the underlying `sleep 2` of an
+	// earlier launch can complete before we sample the state.
+	waitForProcessState(t, runner, testProcess, types.ProcessStateRunning, 5*time.Second)
+
 	// Verify exactly one process is running after all concurrent restarts
 	state, err := runner.GetProcessState(testProcess)
 	if err != nil {
@@ -1426,6 +1444,157 @@ func TestSystem_ConcurrentRestartRaceCondition(t *testing.T) {
 		t.Error(err.Error())
 		return
 	}
+}
+
+func TestSystem_StartProcessResetsStaleTerminatingState(t *testing.T) {
+	testProcess := "stale_terminating"
+	shell := command.DefaultShellConfig()
+
+	project := &types.Project{
+		Processes: map[string]types.ProcessConfig{
+			testProcess: {
+				Name:        testProcess,
+				ReplicaName: testProcess,
+				Executable:  shell.ShellCommand,
+				Args:        []string{shell.ShellArgument, getSleepCommand(1.0)},
+				RestartPolicy: types.RestartPolicyConfig{
+					Restart: types.RestartPolicyNo,
+				},
+			},
+		},
+		ShellConfig: shell,
+	}
+
+	runner, err := NewProjectRunner(&ProjectOpts{
+		project:         project,
+		processesToRun:  []string{},
+		noDeps:          false,
+		mainProcess:     "",
+		mainProcessArgs: []string{},
+		isTuiOn:         false,
+	})
+	if err != nil {
+		t.Error(err.Error())
+		return
+	}
+
+	// Simulate stale state from a prior broken termination.
+	runner.statesMutex.Lock()
+	runner.processStates[testProcess].Status = types.ProcessStateTerminating
+	runner.processStates[testProcess].IsRunning = false
+	runner.statesMutex.Unlock()
+	runner.runProcMutex.Lock()
+	runner.runningProcesses = make(map[string]*Process)
+	runner.runProcMutex.Unlock()
+	runner.doneProcMutex.Lock()
+	runner.doneProcesses = make(map[string]*Process)
+	runner.doneProcMutex.Unlock()
+	runner.logger = pclog.NewNilLogger()
+
+	if err := runner.StartProcess(testProcess); err != nil {
+		t.Fatalf("failed to start process: %v", err)
+	}
+
+	var lastStatus string
+	for attempts := range 200 {
+		state, stateErr := runner.GetProcessState(testProcess)
+		if stateErr != nil {
+			t.Fatalf("failed to get process state: %v", stateErr)
+		}
+		lastStatus = state.Status
+		if state.Status == types.ProcessStateRunning || state.Status == types.ProcessStateCompleted {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+		if attempts == 199 {
+			t.Fatalf("process failed to leave stale Terminating state, last status=%s", state.Status)
+		}
+	}
+
+	if lastStatus == types.ProcessStateTerminating {
+		t.Fatalf("expected process to recover from stale Terminating state, got %s", lastStatus)
+	}
+
+	// Cleanup if still running.
+	if runner.getRunningProcess(testProcess) != nil {
+		if err := runner.StopProcess(testProcess); err != nil {
+			t.Fatalf("failed to stop process: %v", err)
+		}
+	}
+}
+
+func TestSystem_TestTerminatingWithOrphanedChildHoldingPipe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test requires Unix process semantics")
+	}
+	// Reproduce the zombie/stale-Terminating scenario:
+	// A parent process spawns a child that inherits stdout and keeps it open.
+	// When we stop the parent, the stdout pipe never gets an EOF because the
+	// child still holds it. Without a timeout in waitForStdOutErr, the
+	// process would hang in Terminating forever and never reach Completed.
+
+	testProcess := "orphan_pipe"
+	shell := command.DefaultShellConfig()
+	shutdownTimeout := 3
+
+	project := &types.Project{
+		Processes: map[string]types.ProcessConfig{
+			testProcess: {
+				Name:        testProcess,
+				ReplicaName: testProcess,
+				Executable:  shell.ShellCommand,
+				// Parent spawns a child in a new session (setsid) so it won't
+				// receive the SIGTERM sent to the parent's process group.
+				// The child writes to stdout (holding the pipe open) and sleeps.
+				// When the parent is killed, the child survives and keeps the
+				// pipe open, blocking waitForStdOutErr until the timeout fires.
+				Args: []string{shell.ShellArgument, "setsid bash -c 'while true; do echo holding_pipe; sleep 1; done' & sleep 60"},
+				RestartPolicy: types.RestartPolicyConfig{
+					Restart: types.RestartPolicyNo,
+				},
+				ShutDownParams: types.ShutDownParams{
+					ShutDownTimeout: shutdownTimeout,
+					Signal:          int(syscall.SIGTERM),
+				},
+			},
+		},
+		ShellConfig: shell,
+	}
+
+	runner, err := NewProjectRunner(&ProjectOpts{project: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_ = runner.Run()
+	}()
+
+	// Wait for the process to be running (poll via mutex-protected method to avoid race).
+	var proc *Process
+	for i := 0; i < 50; i++ {
+		time.Sleep(100 * time.Millisecond)
+		proc = runner.getRunningProcess(testProcess)
+		if proc != nil {
+			break
+		}
+	}
+	if proc == nil {
+		t.Fatal("process never started")
+	}
+
+	// Stop the parent — it will enter Terminating, but the child keeps stdout open.
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		_ = runner.StopProcess(testProcess)
+	}()
+
+	// The process must reach Completed within the shutdown timeout + margin,
+	// NOT stay stuck in Terminating.
+	waitForProcessState(t, runner, testProcess, types.ProcessStateCompleted,
+		time.Duration(shutdownTimeout+5)*time.Second)
+
+	<-stopDone
 }
 
 func TestReadinessProbeRestart(t *testing.T) {
@@ -1483,4 +1652,53 @@ func getSleepCommand(seconds float64) string {
 		return fmt.Sprintf("ping 127.0.0.1 -n %d >nul", secs+1)
 	}
 	return fmt.Sprintf("sleep %f", seconds)
+}
+
+func TestSystem_TestEnvFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping on Windows: fixture uses bash-specific variable expansion ($$MY_NAME)")
+	}
+	fixture := filepath.Join("..", "..", "fixtures-code", "process-compose-env-file.yaml")
+	t.Run(fixture, func(t *testing.T) {
+		project, err := loader.Load(&loader.LoaderOptions{
+			FileNames: []string{fixture},
+		})
+		if err != nil {
+			t.Error(err.Error())
+			return
+		}
+
+		runner, err := NewProjectRunner(&ProjectOpts{
+			project:         project,
+			processesToRun:  []string{},
+			mainProcessArgs: []string{},
+		})
+		if err != nil {
+			t.Error(err.Error())
+			return
+		}
+
+		err = runner.Run()
+		if err != nil {
+			t.Error(err.Error())
+			return
+		}
+		log, err := runner.GetProcessLog("test_env_file", 0, 1)
+		if err != nil {
+			t.Error(err.Error())
+			return
+		}
+
+		found := false
+		for _, line := range log {
+			if strings.Contains(line, "My name is Inigo_Montoya") {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			t.Errorf("Expected output to contain 'My name is Inigo_Montoya' in the logs")
+		}
+	})
 }

@@ -23,6 +23,7 @@ const (
 	ActionProcessStart     = ActionName("process_start")
 	ActionProcessScale     = ActionName("process_scale")
 	ActionProcessInfo      = ActionName("process_info")
+	ActionProcessSignal    = ActionName("process_signal")
 	ActionProcessStop      = ActionName("process_stop")
 	ActionProcessRestart   = ActionName("process_restart")
 	ActionProcessScreen    = ActionName("process_screen")
@@ -46,6 +47,7 @@ const (
 	ActionLogPrettyPrint   = ActionName("log_pretty_print")
 	ActionDependencyGraph  = ActionName("dependency_graph")
 	ActionNamespaceOps     = ActionName("namespace_ops")
+	ActionCommandPalette   = ActionName("command_palette")
 )
 
 var defaultShortcuts = map[ActionName]tcell.Key{
@@ -56,6 +58,7 @@ var defaultShortcuts = map[ActionName]tcell.Key{
 	ActionLogSelection:     tcell.KeyCtrlS,
 	ActionProcessScale:     tcell.KeyF2,
 	ActionProcessInfo:      tcell.KeyF3,
+	ActionProcessSignal:    tcell.KeyCtrlX,
 	ActionProcessStart:     tcell.KeyF7,
 	ActionProcessStop:      tcell.KeyF9,
 	ActionProcessRestart:   tcell.KeyCtrlR,
@@ -80,6 +83,7 @@ var defaultShortcuts = map[ActionName]tcell.Key{
 	ActionDependencyGraph:  tcell.KeyCtrlQ,
 	ActionLogPrettyPrint:   tcell.KeyRune,
 	ActionNamespaceOps:     tcell.KeyRune,
+	ActionCommandPalette:   tcell.KeyRune,
 }
 
 var defaultShortcutsRunes = map[ActionName]rune{
@@ -87,6 +91,7 @@ var defaultShortcutsRunes = map[ActionName]rune{
 	ActionMarkLog:        'm',
 	ActionLogPrettyPrint: 'p',
 	ActionNamespaceOps:   'n',
+	ActionCommandPalette: ':',
 }
 
 var generalActionsOrder = []ActionName{
@@ -112,6 +117,7 @@ var procActionsOrder = []ActionName{
 	ActionProcFilter,
 	ActionProcessScale,
 	ActionProcessInfo,
+	ActionProcessSignal,
 	ActionProcessStart,
 	ActionProcessScreen,
 	ActionProcessStop,
@@ -122,6 +128,7 @@ var procActionsOrder = []ActionName{
 	ActionNamespaceOps,
 	ActionHideDisabled,
 	ActionDependencyGraph,
+	ActionCommandPalette,
 	ActionQuit,
 }
 
@@ -199,6 +206,18 @@ func (s *ShortCuts) addButton(action ActionName, flex *tview.Flex) {
 
 func (s *ShortCuts) addToggleButton(action ActionName, flex *tview.Flex, state bool) {
 	s.ShortCutKeys[action].addToggleButton(flex, state, s.style)
+}
+
+func (s *ShortCuts) addCustomButton(shortcut, description string, flex *tview.Flex) {
+	btnText := fmt.Sprintf("%s[%s:%s:]%s[-:-:-] ",
+		shortcut,
+		string(s.style.FgColor),
+		string(s.style.HlColor),
+		description)
+	button := tview.NewButton(btnText)
+	button.SetStyle(tcell.StyleDefault.Background(s.style.ButtonBgColor.Color()).Foreground(s.style.KeyColor.Color()))
+	button.SetActivatedStyle(tcell.StyleDefault.Background(s.style.ButtonBgColor.Color()).Foreground(s.style.KeyColor.Color()))
+	flex.AddItem(button, len(shortcut+description)+1, 1, false)
 }
 
 func (s *ShortCuts) addCategory(category string, flex *tview.Flex) {
@@ -341,6 +360,9 @@ func newShortCuts() *ShortCuts {
 			ActionProcessInfo: {
 				Description: "Info",
 			},
+			ActionProcessSignal: {
+				Description: "Send Signal",
+			},
 			ActionProcessStart: {
 				Description: "Start",
 			},
@@ -419,7 +441,13 @@ func newShortCuts() *ShortCuts {
 			ActionNamespaceOps: {
 				Description: "Namespace Operations",
 			},
+			ActionCommandPalette: {
+				Description: "Command Palette",
+			},
 		},
+	}
+	if len(availableSignalOptions()) == 0 {
+		delete(sc.ShortCutKeys, ActionProcessSignal)
 	}
 	for k, v := range sc.ShortCutKeys {
 		assignDefaultKeys(k, v)

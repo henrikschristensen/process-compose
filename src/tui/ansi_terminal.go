@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
@@ -60,8 +63,16 @@ type AnsiTerminal struct {
 	// Mouse mode state
 	mouseModeEnabled bool
 
+	// Application cursor keys mode (DECCKM)
+	applicationCursorKeys bool
+
 	// Callback for sending responses back to the PTY
 	responseCallback func([]byte)
+
+	// Activity tracking (atomic to avoid lock contention with polling)
+	lastWriteNano      atomic.Int64
+	totalLinesScrolled int          // total lines ever scrolled into history (not capped by historySize)
+	maxLogicalLine     atomic.Int64 // max(totalLinesScrolled + cursorY) — only grows on real new output
 }
 
 const (
@@ -553,6 +564,12 @@ func (t *AnsiTerminal) handleSGR(params []int) {
 			t.currentStyle = t.currentStyle.Underline(true)
 		case param == 7: // Reverse
 			t.currentStyle = t.currentStyle.Reverse(true)
+		case param == 22: // Bold off
+			t.currentStyle = t.currentStyle.Bold(false)
+		case param == 24: // Underline off
+			t.currentStyle = t.currentStyle.Underline(false)
+		case param == 27: // Reverse off
+			t.currentStyle = t.currentStyle.Reverse(false)
 		case param >= 30 && param <= 37: // Foreground color
 			t.currentStyle = t.currentStyle.Foreground(ansiColor256(param - 30))
 		case param >= 90 && param <= 97: // Bright Foreground color
@@ -600,6 +617,10 @@ func ansiColor256(n int) tcell.Color {
 }
 
 func (t *AnsiTerminal) putChar(ch rune) {
+	t.lastWriteNano.Store(time.Now().UnixNano())
+	if cur := int64(t.totalLinesScrolled + t.cursorY); cur > t.maxLogicalLine.Load() {
+		t.maxLogicalLine.Store(cur)
+	}
 	if t.latentWrap {
 		t.cursorX = 0
 		t.cursorY++
@@ -666,6 +687,7 @@ func (t *AnsiTerminal) scrollUp() {
 	// Save to history if we are scrolling the entire screen (scrollTop == 0)
 	// and not using alternate screen
 	if t.scrollTop == 0 && !t.useAltScreen {
+		t.totalLinesScrolled++
 		// Deep copy the line being scrolled out
 		line := make([]Cell, t.width)
 		copy(line, t.cells[0])
@@ -938,6 +960,8 @@ func (t *AnsiTerminal) handleDSR(params []int) {
 func (t *AnsiTerminal) handleSetMode(params []int) {
 	for _, p := range params {
 		switch p {
+		case 1: // DECCKM - Application cursor keys
+			t.applicationCursorKeys = true
 		case 25: // Show cursor
 			t.cursorVisible = true
 		case 1000, 1002, 1003: // Mouse reporting modes
@@ -954,6 +978,8 @@ func (t *AnsiTerminal) handleSetMode(params []int) {
 func (t *AnsiTerminal) handleResetMode(params []int) {
 	for _, p := range params {
 		switch p {
+		case 1: // DECCKM - Normal cursor keys
+			t.applicationCursorKeys = false
 		case 25: // Hide cursor
 			t.cursorVisible = false
 		case 1000, 1002, 1003: // Mouse reporting modes
@@ -1025,4 +1051,94 @@ func (t *AnsiTerminal) IsMouseModeEnabled() bool {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 	return t.mouseModeEnabled
+}
+
+func (t *AnsiTerminal) IsApplicationCursorKeys() bool {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	return t.applicationCursorKeys
+}
+
+// GetText extracts text from the cell buffer between two positions.
+// Positions are in screen coordinates. Trailing whitespace per line is trimmed.
+// The selection is linear: from (startCol, startRow) to (endCol, endRow).
+func (t *AnsiTerminal) GetText(startCol, startRow, endCol, endRow int) string {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	// Normalize: ensure start is before end
+	if startRow > endRow || (startRow == endRow && startCol > endCol) {
+		startCol, startRow, endCol, endRow = endCol, endRow, startCol, startRow
+	}
+
+	var lines []string
+	for row := startRow; row <= endRow; row++ {
+		colStart := 0
+		colEnd := t.width - 1
+		if row == startRow {
+			colStart = startCol
+		}
+		if row == endRow {
+			colEnd = endCol
+		}
+
+		var line strings.Builder
+		for col := colStart; col <= colEnd; col++ {
+			cell := t.getCellUnlocked(col, row)
+			line.WriteRune(cell.Char)
+		}
+		lines = append(lines, strings.TrimRight(line.String(), " "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// getCellUnlocked returns a cell without acquiring the lock (caller must hold it).
+func (t *AnsiTerminal) getCellUnlocked(x, y int) Cell {
+	if t.useAltScreen {
+		if y >= 0 && y < t.height && x >= 0 && x < t.width {
+			return t.cells[y][x]
+		}
+		return Cell{Char: ' ', Style: tcell.StyleDefault}
+	}
+
+	if t.viewOffset == 0 {
+		if y >= 0 && y < t.height && x >= 0 && x < t.width {
+			return t.cells[y][x]
+		}
+		return Cell{Char: ' ', Style: tcell.StyleDefault}
+	}
+
+	logicalRow := y - t.viewOffset
+	if logicalRow >= 0 {
+		if logicalRow < t.height && x >= 0 && x < t.width {
+			return t.cells[logicalRow][x]
+		}
+	} else {
+		historyIndex := len(t.history) + logicalRow
+		if historyIndex >= 0 && historyIndex < len(t.history) {
+			line := t.history[historyIndex]
+			if x >= 0 && x < len(line) {
+				return line[x]
+			}
+		}
+	}
+
+	return Cell{Char: ' ', Style: tcell.StyleDefault}
+}
+
+// GetMaxLogicalLine returns the furthest logical line reached by output.
+// Phantom writes (prompt redraws, status updates) operate in-place and
+// do not advance this value. Only real new output increases it.
+func (t *AnsiTerminal) GetMaxLogicalLine() int64 {
+	return t.maxLogicalLine.Load()
+}
+
+// GetLastWriteTime returns the last time data was written to the terminal.
+// Lock-free: uses atomic load to avoid contention with Write().
+func (t *AnsiTerminal) GetLastWriteTime() time.Time {
+	nano := t.lastWriteNano.Load()
+	if nano == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nano)
 }

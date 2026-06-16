@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/f1bonacc1/glippy"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -51,34 +52,48 @@ var specialKeyMap = map[tcell.Key][]byte{
 	tcell.KeyEnd:           []byte("\x1b[F"),
 	tcell.KeyDelete:        []byte("\x1b[3~"),
 	tcell.KeyInsert:        []byte("\x1b[2~"),
+	tcell.KeyBacktab:       []byte("\x1b[Z"), // Shift+Tab
 }
 
 type TerminalView struct {
 	*tview.Box
-	app          *tview.Application
-	pty          *os.File
-	term         *AnsiTerminal
-	terminals    map[*os.File]*AnsiTerminal
-	lock         sync.Mutex
-	isRunning    bool
-	width        int
-	height       int
-	firstDraw    bool // Track if we've had the first draw with proper dimensions
-	inEscapeMode bool
-	exitKey      tcell.Key
-	onEscape     func()
-	isScrolling  bool
+	app           *tview.Application
+	pty           *os.File
+	term          *AnsiTerminal
+	terminals     map[*os.File]*AnsiTerminal
+	activeReaders map[*os.File]bool // tracks PTYs with running readPty goroutines
+	lock          sync.Mutex
+	isRunning     bool
+	width         int
+	height        int
+	firstDraw     bool // Track if we've had the first draw with proper dimensions
+	inEscapeMode  bool
+	exitKey       tcell.Key
+	onEscape      func()
+	onFocus       func()
+	onBlur        func()
+	isScrolling   bool
+
+	// Selection state
+	isSelecting        bool
+	hasSelection       bool
+	selStartCol        int
+	selStartRow        int
+	selEndCol          int
+	selEndRow          int
+	onSelectionChanged func()
 }
 
 func NewTerminalView(app *tview.Application) *TerminalView {
 	tv := &TerminalView{
-		Box:       tview.NewBox().SetBorder(true),
-		app:       app,
-		term:      NewAnsiTerminal(80, 24),
-		terminals: make(map[*os.File]*AnsiTerminal),
-		width:     80,
-		height:    24,
-		exitKey:   tcell.KeyCtrlA,
+		Box:           tview.NewBox().SetBorder(true),
+		app:           app,
+		term:          NewAnsiTerminal(80, 24),
+		terminals:     make(map[*os.File]*AnsiTerminal),
+		activeReaders: make(map[*os.File]bool),
+		width:         80,
+		height:        24,
+		exitKey:       tcell.KeyCtrlA,
 	}
 	tv.SetTitle("Terminal")
 	tv.SetTitleAlign(tview.AlignCenter)
@@ -87,6 +102,73 @@ func NewTerminalView(app *tview.Application) *TerminalView {
 
 func (t *TerminalView) SetOnEscape(handler func()) {
 	t.onEscape = handler
+}
+
+func (t *TerminalView) SetOnFocus(handler func()) {
+	t.onFocus = handler
+}
+
+func (t *TerminalView) SetOnBlur(handler func()) {
+	t.onBlur = handler
+}
+
+func (t *TerminalView) Focus(delegate func(p tview.Primitive)) {
+	t.Box.Focus(delegate)
+	if t.onFocus != nil {
+		t.onFocus()
+	}
+}
+
+func (t *TerminalView) Blur() {
+	t.Box.Blur()
+	if t.onBlur != nil {
+		t.onBlur()
+	}
+}
+
+func (t *TerminalView) SetOnSelectionChanged(handler func()) {
+	t.onSelectionChanged = handler
+}
+
+func (t *TerminalView) HasSelection() bool {
+	return t.hasSelection
+}
+
+func (t *TerminalView) clearSelection() {
+	if t.hasSelection || t.isSelecting {
+		t.hasSelection = false
+		t.isSelecting = false
+		if t.onSelectionChanged != nil {
+			t.onSelectionChanged()
+		}
+	}
+}
+
+func (t *TerminalView) isInSelection(col, row int) bool {
+	if !t.hasSelection && !t.isSelecting {
+		return false
+	}
+	startCol, startRow := t.selStartCol, t.selStartRow
+	endCol, endRow := t.selEndCol, t.selEndRow
+	// Normalize direction
+	startPos := startRow*t.width + startCol
+	endPos := endRow*t.width + endCol
+	if startPos > endPos {
+		startPos, endPos = endPos, startPos
+	}
+	pos := row*t.width + col
+	return pos >= startPos && pos <= endPos
+}
+
+func (t *TerminalView) copySelection() {
+	if !t.hasSelection || t.term == nil {
+		return
+	}
+	text := t.term.GetText(t.selStartCol, t.selStartRow, t.selEndCol, t.selEndRow)
+	if err := glippy.Set(text); err != nil {
+		log.Error().Err(err).Msg("Failed to copy to clipboard")
+	}
+	t.clearSelection()
 }
 
 func (t *TerminalView) SetExitKey(key tcell.Key) {
@@ -190,6 +272,7 @@ func (t *TerminalView) readPty(ptyFile *os.File, term *AnsiTerminal) {
 			if t.pty == ptyFile {
 				t.isRunning = false
 			}
+			delete(t.activeReaders, ptyFile)
 			t.lock.Unlock()
 			return
 		}
@@ -198,14 +281,10 @@ func (t *TerminalView) readPty(ptyFile *os.File, term *AnsiTerminal) {
 			t.lock.Lock()
 			defer t.lock.Unlock()
 
-			// Check if we are still the active PTY
-			if t.pty != ptyFile {
-				return true, false
-			}
-
 			if n > 0 {
 				term.Write(buf[:n])
-				return false, true
+				// Only trigger draw if this is the active PTY
+				return false, t.pty == ptyFile
 			}
 			// Prevent spin loop on 0-byte reads
 			time.Sleep(10 * time.Millisecond)
@@ -260,15 +339,19 @@ func (t *TerminalView) Draw(screen tcell.Screen) {
 	}
 
 	// Start reading PTY on first draw (when we have proper dimensions)
-	// Only start if we haven't already started AND we're running AND we have a PTY
+	// Start reading PTY on first draw (when we have proper dimensions).
+	// Only start if no reader is already running for this PTY.
 	if !t.firstDraw && t.isRunning && t.pty != nil {
 		t.firstDraw = true
 		ptyToRead := t.pty
 		termToUse := t.term
-		// Release lock before starting goroutine to avoid holding it during startup
-		t.lock.Unlock()
-		go t.readPty(ptyToRead, termToUse)
-		t.lock.Lock()
+		if !t.activeReaders[ptyToRead] {
+			t.activeReaders[ptyToRead] = true
+			// Release lock before starting goroutine to avoid holding it during startup
+			t.lock.Unlock()
+			go t.readPty(ptyToRead, termToUse)
+			t.lock.Lock()
+		}
 	}
 
 	if !t.isRunning {
@@ -288,7 +371,11 @@ func (t *TerminalView) Draw(screen tcell.Screen) {
 	for row := range height {
 		for col := range width {
 			cell := t.term.GetCell(col, row)
-			screen.SetContent(x+col, y+row, cell.Char, nil, cell.Style)
+			style := cell.Style
+			if t.isInSelection(col, row) {
+				style = style.Reverse(true)
+			}
+			screen.SetContent(x+col, y+row, cell.Char, nil, style)
 		}
 	}
 
@@ -323,6 +410,15 @@ func (t *TerminalView) InputHandler() func(event *tcell.EventKey, setFocus func(
 }
 
 func (t *TerminalView) handleKeyInput(event *tcell.EventKey) {
+	// Handle selection: Enter copies, any other key clears
+	if t.hasSelection {
+		if event.Key() == tcell.KeyEnter {
+			t.copySelection()
+			return
+		}
+		t.clearSelection()
+	}
+
 	if event.Key() == t.exitKey {
 		if !t.inEscapeMode {
 			t.inEscapeMode = true
@@ -397,7 +493,13 @@ func (t *TerminalView) handleKeyInput(event *tcell.EventKey) {
 	if event.Key() == tcell.KeyRune {
 		data = []byte(string(event.Rune()))
 	} else {
-		data = t.getSpecialKeySequence(event.Key())
+		mod := event.Modifiers()
+		if mod != 0 {
+			data = t.getModifiedKeySequence(event.Key(), mod)
+		}
+		if data == nil {
+			data = t.getSpecialKeySequence(event.Key())
+		}
 	}
 
 	if len(data) > 0 && t.pty != nil {
@@ -413,11 +515,95 @@ func (t *TerminalView) handleKeyInput(event *tcell.EventKey) {
 	}
 }
 
+// Application cursor key mode sequences (DECCKM / SS3)
+var applicationKeyMap = map[tcell.Key][]byte{
+	tcell.KeyUp:    []byte("\x1bOA"),
+	tcell.KeyDown:  []byte("\x1bOB"),
+	tcell.KeyRight: []byte("\x1bOC"),
+	tcell.KeyLeft:  []byte("\x1bOD"),
+	tcell.KeyHome:  []byte("\x1bOH"),
+	tcell.KeyEnd:   []byte("\x1bOF"),
+}
+
+// modifiedKeyCSI maps tcell keys to their xterm CSI base sequences for modifier encoding.
+// Format: CSI <code> ; <modifier> <suffix>
+// For arrow keys: CSI 1 ; <modifier> <A-D>
+// For other keys: CSI <code> ; <modifier> ~
+var modifiedKeyCSI = map[tcell.Key]struct {
+	code   string
+	suffix byte
+}{
+	tcell.KeyUp:     {"1", 'A'},
+	tcell.KeyDown:   {"1", 'B'},
+	tcell.KeyRight:  {"1", 'C'},
+	tcell.KeyLeft:   {"1", 'D'},
+	tcell.KeyHome:   {"1", 'H'},
+	tcell.KeyEnd:    {"1", 'F'},
+	tcell.KeyInsert: {"2", '~'},
+	tcell.KeyDelete: {"3", '~'},
+	tcell.KeyPgUp:   {"5", '~'},
+	tcell.KeyPgDn:   {"6", '~'},
+}
+
+// getModifiedKeySequence returns an xterm-style modified key escape sequence.
+// Modifier parameter follows xterm convention: 1 + bitmask (Shift=1, Alt=2, Ctrl=4).
+func (t *TerminalView) getModifiedKeySequence(key tcell.Key, mod tcell.ModMask) []byte {
+	entry, ok := modifiedKeyCSI[key]
+	if !ok {
+		return nil
+	}
+	modParam := 1
+	if mod&tcell.ModShift != 0 {
+		modParam += 1
+	}
+	if mod&tcell.ModAlt != 0 {
+		modParam += 2
+	}
+	if mod&tcell.ModCtrl != 0 {
+		modParam += 4
+	}
+	return fmt.Appendf(nil, "\x1b[%s;%d%c", entry.code, modParam, entry.suffix)
+}
+
 func (t *TerminalView) getSpecialKeySequence(key tcell.Key) []byte {
+	if t.term != nil && t.term.IsApplicationCursorKeys() {
+		if seq, ok := applicationKeyMap[key]; ok {
+			return seq
+		}
+	}
 	if seq, ok := specialKeyMap[key]; ok {
 		return seq
 	}
 	return nil
+}
+
+// GetMaxLogicalLine returns the furthest logical line reached in a terminal.
+func (t *TerminalView) GetMaxLogicalLine(ptyFile *os.File) int64 {
+	if ptyFile == nil {
+		return 0
+	}
+	t.lock.Lock()
+	term, ok := t.terminals[ptyFile]
+	t.lock.Unlock()
+	if !ok {
+		return 0
+	}
+	return term.GetMaxLogicalLine()
+}
+
+// GetLastActivityTime returns the last write time for a terminal associated with the given PTY.
+// Returns zero time if the PTY has no associated terminal.
+func (t *TerminalView) GetLastActivityTime(ptyFile *os.File) time.Time {
+	if ptyFile == nil {
+		return time.Time{}
+	}
+	t.lock.Lock()
+	term, ok := t.terminals[ptyFile]
+	t.lock.Unlock()
+	if !ok {
+		return time.Time{}
+	}
+	return term.GetLastWriteTime()
 }
 
 func (t *TerminalView) Stop() {
@@ -453,82 +639,107 @@ func (t *TerminalView) MouseHandler() func(action tview.MouseAction, event *tcel
 			return false, nil
 		}
 
-		// Forward mouse event to PTY
-		// We use X10 mouse encoding (simple encoding)
-		// Format: CSI M <button+32> <x+33> <y+33>
-		// Note: coordinates are 1-based in Xterm protocol
+		// When PTY mouse mode is OFF, handle text selection
+		if !t.term.IsMouseModeEnabled() {
+			return t.handleSelectionMouse(action, relX, relY, setFocus)
+		}
 
-		btn := event.Buttons()
-		var buttonCode byte
+		// PTY mouse mode is ON: forward to PTY
+		return t.handlePtyMouse(action, event, relX, relY, setFocus)
+	}
+}
 
-		switch {
-		case btn&tcell.Button1 != 0: // Left click
-			buttonCode = 0
-		case btn&tcell.Button2 != 0: // Middle click
-			buttonCode = 1
-		case btn&tcell.Button3 != 0: // Right click
-			buttonCode = 2
-		case btn&tcell.WheelUp != 0:
-			if !t.isRunning {
-				return true, nil
+func (t *TerminalView) handleSelectionMouse(action tview.MouseAction, relX, relY int, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
+	switch action {
+	case tview.MouseLeftDown:
+		t.clearSelection()
+		t.isSelecting = true
+		t.selStartCol = relX
+		t.selStartRow = relY
+		t.selEndCol = relX
+		t.selEndRow = relY
+		setFocus(t)
+		return true, t // Capture subsequent mouse events
+	case tview.MouseMove:
+		if t.isSelecting {
+			t.selEndCol = relX
+			t.selEndRow = relY
+			return true, t // Keep capturing
+		}
+	case tview.MouseLeftUp:
+		if t.isSelecting {
+			t.selEndCol = relX
+			t.selEndRow = relY
+			t.isSelecting = false
+			// Only mark as having selection if start != end
+			if t.selStartCol != t.selEndCol || t.selStartRow != t.selEndRow {
+				t.hasSelection = true
+				if t.onSelectionChanged != nil {
+					t.onSelectionChanged()
+				}
 			}
-			if t.term.IsMouseModeEnabled() {
-				buttonCode = 64
-				break // Continue to encoding
-			}
-			t.isScrolling = true
-			t.term.ScrollViewport(1)
-			return true, nil
-		case btn&tcell.WheelDown != 0:
-			if !t.isRunning {
-				return true, nil
-			}
-			if t.term.IsMouseModeEnabled() {
-				buttonCode = 65
-				break // Continue to encoding
-			}
-			t.isScrolling = true
-			t.term.ScrollViewport(-1)
-			return true, nil
-
-		default:
-			// For movements or unsupported buttons, we consume but don't send (for now)
-			// unless we implement full motion tracking
-			return true, nil
+			return true, nil // Release capture
 		}
-
-		// Add modifiers
-		if event.Modifiers()&tcell.ModShift != 0 {
-			buttonCode |= 4
-		}
-		if event.Modifiers()&tcell.ModAlt != 0 {
-			buttonCode |= 8
-		}
-		if event.Modifiers()&tcell.ModCtrl != 0 {
-			buttonCode |= 16
-		}
-
-		// Encode and write
-		// <button+32> <x+33> <y+33>
-		encoded := []byte{
-			'\x1b', '[', 'M',
-			buttonCode + 32,
-			byte(relX) + 33,
-			byte(relY) + 33,
-		}
-
-		if t.term.IsMouseModeEnabled() {
-			_, err := t.pty.Write(encoded)
-			if err != nil {
-				log.Error().Err(err).Msg("Error writing mouse event to PTY")
-			}
-		}
-
-		// Ensure we get focus on click (especially left click)
-		if action == tview.MouseLeftClick || action == tview.MouseLeftDown {
-			setFocus(t)
-		}
-
+	case tview.MouseLeftClick:
+		t.clearSelection()
+		setFocus(t)
+		return true, nil
+	case tview.MouseScrollUp:
+		t.isScrolling = true
+		t.term.ScrollViewport(1)
+		return true, nil
+	case tview.MouseScrollDown:
+		t.isScrolling = true
+		t.term.ScrollViewport(-1)
 		return true, nil
 	}
+	return true, nil
+}
+
+func (t *TerminalView) handlePtyMouse(action tview.MouseAction, event *tcell.EventMouse, relX, relY int, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
+	btn := event.Buttons()
+	var buttonCode byte
+
+	switch {
+	case btn&tcell.Button1 != 0:
+		buttonCode = 0
+	case btn&tcell.Button2 != 0:
+		buttonCode = 1
+	case btn&tcell.Button3 != 0:
+		buttonCode = 2
+	case btn&tcell.WheelUp != 0:
+		buttonCode = 64
+	case btn&tcell.WheelDown != 0:
+		buttonCode = 65
+	default:
+		return true, nil
+	}
+
+	if event.Modifiers()&tcell.ModShift != 0 {
+		buttonCode |= 4
+	}
+	if event.Modifiers()&tcell.ModAlt != 0 {
+		buttonCode |= 8
+	}
+	if event.Modifiers()&tcell.ModCtrl != 0 {
+		buttonCode |= 16
+	}
+
+	encoded := []byte{
+		'\x1b', '[', 'M',
+		buttonCode + 32,
+		byte(relX) + 33,
+		byte(relY) + 33,
+	}
+
+	_, err := t.pty.Write(encoded)
+	if err != nil {
+		log.Error().Err(err).Msg("Error writing mouse event to PTY")
+	}
+
+	if action == tview.MouseLeftClick || action == tview.MouseLeftDown {
+		setFocus(t)
+	}
+
+	return true, nil
 }

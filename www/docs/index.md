@@ -2,6 +2,8 @@
 
 Process Compose is a simple and flexible scheduler and orchestrator to manage non-containerized applications.
 
+<img src="https://github.com/F1bonacc1/process-compose/raw/main/imgs/demo.gif" alt="Demo" />
+
 ## Why was it made?
 
 Because sometimes you just don't want to deal with docker files, volume definitions, networks and docker registries.
@@ -51,3 +53,5 @@ Check the [Documentation](launcher.md) for more advanced use cases.
 - [Recipes](https://github.com/F1bonacc1/process-compose-recipes) Management
 - Scheduled Processes (cron and interval-based)
 - Dependency Graph visualization (CLI, TUI, and API)
+- [MCP Server](mcp-server.md) integration for AI assistants — expose processes as tools/resources and (optionally) the project's own control plane (start/stop/scale/list/logs)
+- Processes Monitor (Push Notifications)

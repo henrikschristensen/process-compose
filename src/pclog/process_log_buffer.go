@@ -2,85 +2,118 @@ package pclog
 
 import (
 	"sync"
-)
-
-const (
-	slack = 100
+	"sync/atomic"
+	"time"
 )
 
 type ProcessLogBuffer struct {
-	mxBuf     sync.Mutex
-	buffer    []string
-	size      int
-	mxObs     sync.Mutex
-	observers map[string]LogObserver
+	mxBuf          sync.Mutex
+	buffer         []string // fixed-size ring buffer
+	size           int      // capacity
+	head           int      // next write index
+	count          int      // items stored (0..size)
+	mxObs          sync.Mutex
+	observers      map[string]LogObserver
+	lastWriteNano  atomic.Int64 // activity tracking (lock-free)
 }
 
+const defaultSize = 1000
+
 func NewLogBuffer(size int) *ProcessLogBuffer {
+	if size <= 0 {
+		size = defaultSize
+	}
 	return &ProcessLogBuffer{
 		size:      size,
-		buffer:    make([]string, 0, size+slack),
+		buffer:    make([]string, size),
 		observers: map[string]LogObserver{},
 	}
 }
 
+// GetLastWriteTime returns the last time data was written to the log buffer.
+// Lock-free: uses atomic load to avoid contention with Write().
+func (b *ProcessLogBuffer) GetLastWriteTime() time.Time {
+	nano := b.lastWriteNano.Load()
+	if nano == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nano)
+}
+
 func (b *ProcessLogBuffer) Write(message string) {
+	b.lastWriteNano.Store(time.Now().UnixNano())
 	b.mxBuf.Lock()
-	b.buffer = append(b.buffer, message)
-	if len(b.buffer) > b.size+slack {
-		b.buffer = b.buffer[slack:]
+	b.buffer[b.head] = message
+	b.head = (b.head + 1) % b.size
+	if b.count < b.size {
+		b.count++
 	}
 	b.mxBuf.Unlock()
+
+	// Snapshot observers under the lock, then fan out without holding it.
+	// Holding mxObs across observer.WriteString lets a slow/blocked observer
+	// stall every other Write and any new GetLogsAndSubscribe on this buffer.
 	b.mxObs.Lock()
-	defer b.mxObs.Unlock()
+	snapshot := make([]LogObserver, 0, len(b.observers))
 	for _, observer := range b.observers {
+		snapshot = append(snapshot, observer)
+	}
+	b.mxObs.Unlock()
+	for _, observer := range snapshot {
 		_, _ = observer.WriteString(message)
 	}
-
 }
 
 func (b *ProcessLogBuffer) GetLogRange(endOffset, limit int) []string {
 	b.mxBuf.Lock()
 	defer b.mxBuf.Unlock()
 
-	if len(b.buffer) == 0 {
+	if b.count == 0 {
 		return []string{}
 	}
 
 	if endOffset < 0 {
 		endOffset = 0
 	}
-
-	if endOffset > len(b.buffer) {
-		endOffset = len(b.buffer)
+	if endOffset > b.count {
+		endOffset = b.count
 	}
 
-	endIndex := len(b.buffer) - endOffset
-	if endIndex < 0 {
-		endIndex = 0
+	available := b.count - endOffset
+	if available <= 0 {
+		return []string{}
 	}
 
 	if limit <= 0 {
-		// return all available lines up to endIndex
-		return b.buffer[:endIndex]
+		limit = available
+	}
+	if limit > available {
+		limit = available
 	}
 
-	startIndex := endIndex - limit
-	if startIndex < 0 {
-		startIndex = 0
+	result := make([]string, limit)
+	// Start of the logical buffer (oldest element)
+	start := (b.head - b.count + b.size) % b.size
+	// Skip to the first element we want: offset from end means we skip the last endOffset items,
+	// and we want the last `limit` items of the remaining.
+	firstIdx := (start + available - limit) % b.size
+	for i := range limit {
+		result[i] = b.buffer[(firstIdx+i)%b.size]
 	}
-
-	return b.buffer[startIndex:endIndex]
+	return result
 }
 
 func (b *ProcessLogBuffer) GetLogLength() int {
-	return len(b.buffer)
+	b.mxBuf.Lock()
+	defer b.mxBuf.Unlock()
+	return b.count
 }
 
 func (b *ProcessLogBuffer) GetLogsAndSubscribe(observer LogObserver) {
+	lines := b.GetLogRange(0, observer.GetTailLength())
 	b.mxObs.Lock()
 	defer b.mxObs.Unlock()
-	observer.SetLines(b.GetLogRange(0, observer.GetTailLength()))
+	observer.SetLines(lines)
 	b.observers[observer.GetUniqueID()] = observer
 }
 
@@ -105,5 +138,6 @@ func (b *ProcessLogBuffer) Close() {
 func (b *ProcessLogBuffer) Truncate() {
 	b.mxBuf.Lock()
 	defer b.mxBuf.Unlock()
-	b.buffer = b.buffer[:0]
+	b.head = 0
+	b.count = 0
 }

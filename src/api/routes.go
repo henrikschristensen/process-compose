@@ -60,6 +60,7 @@ func InitRoutes(useLogger bool, handler *PcApi) *gin.Engine {
 	r.GET("/process/logs/:name/:endOffset/:limit", handler.GetProcessLogs)
 	r.DELETE("/process/logs/:name", handler.TruncateProcessLogs)
 	r.PATCH("/process/stop/:name", handler.StopProcess)
+	r.PATCH("/process/signal/:name/:signal", handler.SendSignal)
 	r.PATCH("/processes/stop", handler.StopProcesses)
 	r.POST("/process/start/:name", handler.StartProcess)
 	r.POST("/process/restart/:name", handler.RestartProcess)
@@ -74,6 +75,7 @@ func InitRoutes(useLogger bool, handler *PcApi) *gin.Engine {
 	r.GET("/namespaces", handler.GetNamespaces)
 	r.PATCH("/process/scale/:name/:scale", handler.ScaleProcess)
 	r.GET("/process/logs/ws", handler.HandleLogsStream)
+	r.GET("/process/states/ws", handler.HandleStatesStream)
 	r.GET("/graph", handler.GetDependencyGraph)
 
 	return r

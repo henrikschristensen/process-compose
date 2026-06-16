@@ -1,5 +1,62 @@
 # Release Notes
 
+## [v1.110.0] - 2026-05-01
+
+### New Features
+
+- Added [process activity and silence monitoring](https://f1bonacc1.github.io/process-compose/tui/#process-activity-monitor) in the TUI, with deduplication of silence notifications.
+- Added a process state push-notification stream over WebSocket, plus a [`process-compose process monitor`](https://f1bonacc1.github.io/process-compose/cli/process-compose_process_monitor/) CLI subcommand to subscribe to it, addresses issue #470.
+- Added a [command palette](https://f1bonacc1.github.io/process-compose/tui/#command-palette) to the TUI for process management - start, stop, restart, scale, signal, create, and delete.
+- Added a [`process-compose analyze critical-chain`](https://f1bonacc1.github.io/process-compose/cli/process-compose_analyze_critical-chain/) subcommand that prints a tree of processes with startup timings, in the spirit of `systemd-analyze critical-chain`, by Ryan Mulligan.
+- Added [built-in MCP control tools](https://f1bonacc1.github.io/process-compose/mcp-server/#built-in-control-tools) (`pc_*`) so MCP clients can manage the running project, opt-in via `expose_control_tools: true`.
+- Added Shift+Tab support and xterm-style modifier key sequence encoding in the terminal view.
+- Added OSC 52 clipboard status notifications via the glippy v1.2.0 upgrade.
+
+### Bug Fixes
+
+- Fixed daemons being included in total CPU and RAM calculations.
+- Fixed process CPU metric retrieval to use `PercentWithContext` with interval 0, addresses issue #471.
+- Fixed the casing mismatch between Swagger docs (lower) and the REST API (capital), addresses issue #457.
+
+---
+
+## [v1.103.0] - 2026-04-03
+
+### New Features
+
+- Added text selection and clipboard copying support in terminal views.
+- Added application cursor key mode (DECCKM) support for interactive terminal processes.
+- Added context-aware help that updates dynamically when the terminal view is focused.
+
+### Bug Fixes
+
+- Fixed extra brackets appearing in text containing ANSI escape sequences, addresses issue #449.
+- Fixed zombie processes not being reaped after exit.
+- Fixed stale terminating states and pipe blocking during process shutdown, addresses issue #450.
+- Fixed missing ANSI escape code support for disabling bold, underline, and reverse text styles in terminal views.
+
+---
+
+## [v1.100.0] - 2026-03-20
+
+### New Features
+
+- **POSIX Signal Support**: Added support for sending custom POSIX signals to processes via the TUI, by Kevin J. Lynagh.
+- **Process Environment Files**: Added process-specific `env_file` support to load environment variables from dedicated files, addresses issue ([#406](https://github.com/F1bonacc1/process-compose/issues/406)).
+- **Log Color Control**: Added the `--log-no-color` CLI flag and `PC_LOG_NO_COLOR` environment variable to disable color output in log files, addresses issue ([#440](https://github.com/F1bonacc1/process-compose/issues/440)).
+- **Self-Update Capability**: Added a self-update command to securely download and install new versions.
+- **Shutdown Logging**: Added explicit logging when a process exits or is skipped and triggers project shutdown.
+- **TUI Footer Links**: Added "Donate" and "Ask Question" links to the TUI footer that open in the default browser.
+
+### Bug Fixes
+
+- Fixed a race condition by waiting for the detached daemon's HTTP server to be ready before proceeding, addresses issue ([#443](https://github.com/F1bonacc1/process-compose/issues/443)) and ([#424](https://github.com/F1bonacc1/process-compose/issues/424)).
+- Fixed the process editing loop to correctly exit if a user exits without changing the configuration.
+- Fixed incorrectly typed `RestartPolicy` and `ProcessCondition` properties when marshaling for editing.
+- Improved concurrency safety in the project runner.
+
+---
+
 ## [v1.94.0] - 2026-02-21
 
 ### New Features

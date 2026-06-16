@@ -9,6 +9,7 @@ TUI Allows you to:
 - Restart running processes
 - Edit processes' configuration
 - Review process dependency graph (`Ctrl+Q`)
+- Command palette for quick actions (`:`)
 
 TUI is the default run mode, but it's possible to disable it:
 
@@ -45,6 +46,28 @@ processes:
 ```
 
 > :bulb: Too long log lines (above 2^16 bytes long) can cause the log collector to hang.
+
+## Command Palette
+
+Press `:` to open the command palette — a searchable list of available actions. Type to filter, use arrow keys to navigate, and press `Enter` to select.
+
+Available commands:
+
+| Command | Description |
+|---------|-------------|
+| Start Process | Start a stopped process |
+| Stop Process | Stop a running process |
+| Restart Process | Restart a process |
+| Scale Process | Set the number of replicas for a process |
+| Send Signal | Send an OS signal to a process |
+| Create Process | Create and start an ephemeral process |
+| Delete Process | Stop and remove a process (only if no other process depends on it) |
+
+**Create Process** prompts for a process name and a shell command. Use `Tab` to toggle whether the process should be interactive. The new process runs in the current working directory and is selected automatically after creation. Created processes are ephemeral — they are not saved to `process-compose.yaml`.
+
+**Delete Process** removes the process from the running project. It will refuse to delete a process that other processes depend on. The process is not removed from `process-compose.yaml`.
+
+Multi-step commands support `Esc` to go back to the previous step.
 
 ## Shortcuts Configuration
 
@@ -89,10 +112,14 @@ shortcuts:
   dependency_graph:
     description: Dependency Graph
     shortcut: Ctrl-Q
+  command_palette:
+    description: Command Palette
+    shortcut: ":"
 ```
 
 `shortcuts.yaml` can contain only the values you wish to change, default values will be used for the rest.  
 For example if you want to replace the default `quit` shortcut to be `F3` instead of `F10` and rename the `process_stop` to be `Terminate`, the configurion will be as follows:
+
 ```yaml
 # $XDG_CONFIG_HOME/process-compose/shortcuts.yaml
 shortcuts:
@@ -171,6 +198,34 @@ style:
   stat_table:
     logoColor: '#0000FF' #blue
 ```
+
+## Process Activity Monitor
+
+Monitor processes for silence or new activity while they are not focused in the TUI. Works with both interactive (PTY) and regular processes (via log output). When the monitored condition is met, a visual indicator appears in the process table icon column:
+
+- `◆` — new **activity** detected (output appeared while unfocused)
+- `◇` — **silence** detected (no output for the configured threshold)
+
+The notification resets when you select the process.
+
+```yaml
+processes:
+  claude-session:
+    command: "claude"
+    is_interactive: true
+    monitor_for: silence            # "activity", "silence", or "none" (default)
+    monitor_silence_threshold: 10s  # default: 5s, only used with "silence"
+  
+  log-watcher:
+    command: "tail -f /var/log/app/errors.log"
+    monitor_for: activity           # notify when new output appears
+```
+
+| Value | Trigger |
+|-------|---------|
+| `none` | No monitoring (default) |
+| `activity` | New output appeared while the process was not selected |
+| `silence` | No output for longer than the threshold while the process is running and not selected |
 
 ## TUI State Settings
 

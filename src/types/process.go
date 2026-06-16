@@ -23,43 +23,46 @@ type (
 	Environment   []string
 	EnvCmd        map[string]string
 	ProcessConfig struct {
-		Name                    string                 `yaml:",omitempty"`
-		Disabled                bool                   `yaml:"disabled,omitempty"`
-		IsDaemon                bool                   `yaml:"is_daemon,omitempty"`
-		Command                 string                 `yaml:"command,omitempty"`
-		Entrypoint              []string               `yaml:"entrypoint,omitempty"`
-		LogLocation             string                 `yaml:"log_location,omitempty"`
-		LoggerConfig            *LoggerConfig          `yaml:"log_configuration,omitempty"`
-		Environment             Environment            `yaml:"environment,omitempty"`
-		RestartPolicy           RestartPolicyConfig    `yaml:"availability,omitempty"`
-		DependsOn               DependsOnConfig        `yaml:"depends_on,omitempty"`
-		LivenessProbe           *health.Probe          `yaml:"liveness_probe,omitempty"`
-		ReadinessProbe          *health.Probe          `yaml:"readiness_probe,omitempty"`
-		ReadyLogLine            string                 `yaml:"ready_log_line,omitempty"`
-		ShutDownParams          ShutDownParams         `yaml:"shutdown,omitempty"`
-		DisableAnsiColors       bool                   `yaml:"disable_ansi_colors,omitempty"`
-		WorkingDir              string                 `yaml:"working_dir,omitempty"`
-		Namespace               string                 `yaml:"namespace,omitempty"`
-		Replicas                int                    `yaml:"replicas,omitempty"`
-		Extensions              map[string]interface{} `yaml:",inline"`
-		Description             string                 `yaml:"description,omitempty"`
-		Vars                    Vars                   `yaml:"vars,omitempty"`
-		IsForeground            bool                   `yaml:"is_foreground,omitempty"`
-		IsTty                   bool                   `yaml:"is_tty,omitempty"`
-		IsElevated              bool                   `yaml:"is_elevated,omitempty"`
-		IsInteractive           bool                   `yaml:"is_interactive,omitempty"`
-		LaunchTimeout           int                    `yaml:"launch_timeout_seconds,omitempty"`
-		IsDisabled              string                 `yaml:"is_disabled,omitempty"`
-		DisableDotEnv           bool                   `yaml:"is_dotenv_disabled,omitempty"`
-		OriginalConfig          string                 `yaml:"original_config,omitempty"`
-		ReplicaNum              int                    `yaml:"replica_num,omitempty"`
-		ReplicaName             string                 `yaml:"replica_name,omitempty"`
-		Executable              string                 `yaml:"executable,omitempty"`
-		Args                    []string               `yaml:"args,omitempty"`
-		Schedule                *ScheduleConfig        `yaml:"schedule,omitempty"`
-		MCP                     *MCPProcessConfig      `yaml:"mcp,omitempty"`
-		TruncateLog             bool                   `yaml:"truncate_log,omitempty"`
-		DisableCommandRendering bool                   `yaml:"is_template_disabled,omitempty"`
+		Name                    string                 `yaml:",omitempty" json:"name,omitempty"`
+		Disabled                bool                   `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+		IsDaemon                bool                   `yaml:"is_daemon,omitempty" json:"isDaemon,omitempty"`
+		Command                 string                 `yaml:"command,omitempty" json:"command,omitempty"`
+		Entrypoint              []string               `yaml:"entrypoint,omitempty" json:"entrypoint,omitempty"`
+		LogLocation             string                 `yaml:"log_location,omitempty" json:"logLocation,omitempty"`
+		LoggerConfig            *LoggerConfig          `yaml:"log_configuration,omitempty" json:"loggerConfig,omitempty"`
+		Environment             Environment            `yaml:"environment,omitempty" json:"environment,omitempty"`
+		EnvFile                 string                 `yaml:"env_file,omitempty" json:"envFile,omitempty"`
+		RestartPolicy           RestartPolicyConfig    `yaml:"availability,omitempty" json:"restartPolicy,omitempty"`
+		DependsOn               DependsOnConfig        `yaml:"depends_on,omitempty" json:"dependsOn,omitempty"`
+		LivenessProbe           *health.Probe          `yaml:"liveness_probe,omitempty" json:"livenessProbe,omitempty"`
+		ReadinessProbe          *health.Probe          `yaml:"readiness_probe,omitempty" json:"readinessProbe,omitempty"`
+		ReadyLogLine            string                 `yaml:"ready_log_line,omitempty" json:"readyLogLine,omitempty"`
+		ShutDownParams          ShutDownParams         `yaml:"shutdown,omitempty" json:"shutDownParams,omitempty"`
+		DisableAnsiColors       bool                   `yaml:"disable_ansi_colors,omitempty" json:"disableAnsiColors,omitempty"`
+		WorkingDir              string                 `yaml:"working_dir,omitempty" json:"workingDir,omitempty"`
+		Namespace               string                 `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+		Replicas                int                    `yaml:"replicas,omitempty" json:"replicas,omitempty"`
+		Extensions              map[string]interface{} `yaml:",inline" json:"extensions,omitempty"`
+		Description             string                 `yaml:"description,omitempty" json:"description,omitempty"`
+		Vars                    Vars                   `yaml:"vars,omitempty" json:"vars,omitempty"`
+		IsForeground            bool                   `yaml:"is_foreground,omitempty" json:"isForeground,omitempty"`
+		IsTty                   bool                   `yaml:"is_tty,omitempty" json:"isTty,omitempty"`
+		IsElevated              bool                   `yaml:"is_elevated,omitempty" json:"isElevated,omitempty"`
+		IsInteractive           bool                   `yaml:"is_interactive,omitempty" json:"isInteractive,omitempty"`
+		LaunchTimeout           int                    `yaml:"launch_timeout_seconds,omitempty" json:"launchTimeout,omitempty"`
+		IsDisabled              string                 `yaml:"is_disabled,omitempty" json:"isDisabled,omitempty"`
+		DisableDotEnv           bool                   `yaml:"is_dotenv_disabled,omitempty" json:"disableDotEnv,omitempty"`
+		OriginalConfig          string                 `yaml:"original_config,omitempty" json:"originalConfig,omitempty"`
+		ReplicaNum              int                    `yaml:"replica_num,omitempty" json:"replicaNum,omitempty"`
+		ReplicaName             string                 `yaml:"replica_name,omitempty" json:"replicaName,omitempty"`
+		Executable              string                 `yaml:"executable,omitempty" json:"executable,omitempty"`
+		Args                    []string               `yaml:"args,omitempty" json:"args,omitempty"`
+		Schedule                *ScheduleConfig        `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+		MCP                     *MCPProcessConfig      `yaml:"mcp,omitempty" json:"mcp,omitempty"`
+		TruncateLog             bool                   `yaml:"truncate_log,omitempty" json:"truncateLog,omitempty"`
+		DisableCommandRendering bool                   `yaml:"is_template_disabled,omitempty" json:"disableCommandRendering,omitempty"`
+		MonitorFor              MonitorFor             `yaml:"monitor_for,omitempty" json:"monitorFor,omitempty" jsonschema:"type=string,enum=none,enum=activity,enum=silence"`
+		MonitorSilenceThreshold time.Duration          `yaml:"monitor_silence_threshold,omitempty" json:"monitorSilenceThreshold,omitempty"`
 	}
 )
 
@@ -115,6 +118,7 @@ func (p *ProcessConfig) Compare(another *ProcessConfig) bool {
 		p.LogLocation != another.LogLocation ||
 		p.ReadyLogLine != another.ReadyLogLine ||
 		p.DisableAnsiColors != another.DisableAnsiColors ||
+		p.EnvFile != another.EnvFile ||
 		p.WorkingDir != another.WorkingDir ||
 		p.Namespace != another.Namespace ||
 		p.Replicas != another.Replicas ||
@@ -247,6 +251,19 @@ type ProcessState struct {
 	CPU              float64       `json:"cpu"`
 	IsRunning        bool          `json:"is_running"`
 	NextRunTime      *time.Time    `json:"next_run_time,omitempty"`
+	LastActivityTime *time.Time    `json:"last_activity_time,omitempty"`
+	MaxLogicalLine   int64         `json:"-"` // TUI-only: furthest logical line reached in terminal
+	// ProcessStartTime is the wall-clock time the process (first) entered a
+	// running/launched state. Used by `process-compose analyze critical-chain`.
+	ProcessStartTime *time.Time `json:"process_start_time,omitempty"`
+	// ProcessReadyTime is the wall-clock time the process became ready. For
+	// processes with a readiness probe or a `ready_log_line`, this is set when
+	// the probe succeeds / the line is observed. For processes without any
+	// readiness probe, it equals ProcessStartTime.
+	ProcessReadyTime *time.Time `json:"process_ready_time,omitempty"`
+	// ProcessEndTime is the wall-clock time the process ended (completed,
+	// errored, terminated, or was skipped).
+	ProcessEndTime *time.Time `json:"process_end_time,omitempty"`
 }
 
 type ProcessPorts struct {
@@ -257,6 +274,34 @@ type ProcessPorts struct {
 
 type ProcessesState struct {
 	States []ProcessState `json:"data"`
+}
+
+// ProcessStateEvent is published whenever a process's observable state
+// (Status, Health, or terminal exit info) changes. It is also emitted as a
+// snapshot for every existing process when a subscriber first connects.
+type ProcessStateEvent struct {
+	// Snapshot is true for events emitted as part of the initial replay on
+	// subscribe, false for live transitions.
+	Snapshot bool `json:"snapshot,omitempty"`
+	// State is a self-contained copy of the process state at the moment of
+	// the event.
+	State ProcessState `json:"state"`
+}
+
+// StateObserver consumes process state events. Implementations must be safe
+// for concurrent calls; Notify is invoked while the broadcaster's mutex is
+// held, so observers should not block on slow I/O.
+//
+// The interface lives next to ProcessStateEvent so consumers (api, client,
+// tui) can implement and reference it without importing the heavier app
+// package.
+type StateObserver interface {
+	// Notify is called for every event delivered to this observer. If the
+	// observer cannot accept the event (e.g. its buffer is full), it should
+	// drop or close itself rather than block.
+	Notify(ev ProcessStateEvent)
+	// UniqueID identifies this observer for subscribe/unsubscribe.
+	UniqueID() string
 }
 
 func (p *ProcessesState) IsReady() bool {
@@ -335,9 +380,24 @@ func (p *RestartPolicy) UnmarshalYAML(node *yaml.Node) error {
 	case "no":
 		*p = RestartPolicyNo
 	default:
-		return fmt.Errorf("Invalid restart policy: %q", value)
+		return fmt.Errorf("invalid restart policy: %q", value)
 	}
 	return nil
+}
+
+func (p RestartPolicy) MarshalYAML() (interface{}, error) {
+	switch p {
+	case RestartPolicyNo:
+		return "no", nil
+	case RestartPolicyAlways:
+		return "always", nil
+	case RestartPolicyOnFailure:
+		return "on_failure", nil
+	case RestartPolicyExitOnFailure:
+		return "exit_on_failure", nil
+	default:
+		return nil, fmt.Errorf("invalid restart policy: %d", p)
+	}
 }
 
 const (
@@ -380,18 +440,18 @@ const (
 )
 
 type RestartPolicyConfig struct {
-	Restart        RestartPolicy `yaml:",omitempty" jsonschema:"type=string,enum=always,enum=on_failure,enum=exit_on_failure,enum=no"`
-	BackoffSeconds int           `yaml:"backoff_seconds,omitempty"`
-	MaxRestarts    int           `yaml:"max_restarts,omitempty"`
-	ExitOnEnd      bool          `yaml:"exit_on_end,omitempty"`
-	ExitOnSkipped  bool          `yaml:"exit_on_skipped,omitempty"`
+	Restart        RestartPolicy `yaml:",omitempty" json:"restart,omitempty" jsonschema:"type=string,enum=always,enum=on_failure,enum=exit_on_failure,enum=no"`
+	BackoffSeconds int           `yaml:"backoff_seconds,omitempty" json:"backoffSeconds,omitempty"`
+	MaxRestarts    int           `yaml:"max_restarts,omitempty" json:"maxRestarts,omitempty"`
+	ExitOnEnd      bool          `yaml:"exit_on_end,omitempty" json:"exitOnEnd,omitempty"`
+	ExitOnSkipped  bool          `yaml:"exit_on_skipped,omitempty" json:"exitOnSkipped,omitempty"`
 }
 
 type ShutDownParams struct {
-	ShutDownCommand string `yaml:"command,omitempty"`
-	ShutDownTimeout int    `yaml:"timeout_seconds,omitempty"`
-	Signal          int    `yaml:"signal,omitempty"`
-	ParentOnly      bool   `yaml:"parent_only,omitempty"`
+	ShutDownCommand string `yaml:"command,omitempty" json:"shutDownCommand,omitempty"`
+	ShutDownTimeout int    `yaml:"timeout_seconds,omitempty" json:"shutDownTimeout,omitempty"`
+	Signal          int    `yaml:"signal,omitempty" json:"signal,omitempty"`
+	ParentOnly      bool   `yaml:"parent_only,omitempty" json:"parentOnly,omitempty"`
 }
 
 //go:generate stringer -type=ProcessCondition
@@ -427,17 +487,74 @@ func (c *ProcessCondition) UnmarshalYAML(node *yaml.Node) error {
 	case "process_log_ready":
 		*c = ProcessConditionLogReady
 	default:
-		return fmt.Errorf("Invalid process dependency condition: %q", value)
+		return fmt.Errorf("invalid process dependency condition: %q", value)
 	}
 	return nil
+}
+
+func (c ProcessCondition) MarshalYAML() (interface{}, error) {
+	switch c {
+	case ProcessConditionCompleted:
+		return "process_completed", nil
+	case ProcessConditionCompletedSuccessfully:
+		return "process_completed_successfully", nil
+	case ProcessConditionHealthy:
+		return "process_healthy", nil
+	case ProcessConditionStarted:
+		return "process_started", nil
+	case ProcessConditionLogReady:
+		return "process_log_ready", nil
+	default:
+		return nil, fmt.Errorf("invalid process condition: %d", c)
+	}
+}
+
+//go:generate stringer -type=MonitorFor
+type MonitorFor int
+
+const (
+	MonitorForNone     MonitorFor = iota // default - no monitoring
+	MonitorForActivity                   // notify on new output while unfocused
+	MonitorForSilence                    // notify on no output while unfocused
+)
+
+func (m *MonitorFor) UnmarshalYAML(node *yaml.Node) error {
+	var value string
+	if err := node.Decode(&value); err != nil {
+		return err
+	}
+	switch value {
+	case "none", "":
+		*m = MonitorForNone
+	case "activity":
+		*m = MonitorForActivity
+	case "silence":
+		*m = MonitorForSilence
+	default:
+		return fmt.Errorf("invalid monitor_for value: %q", value)
+	}
+	return nil
+}
+
+func (m MonitorFor) MarshalYAML() (interface{}, error) {
+	switch m {
+	case MonitorForNone:
+		return "none", nil
+	case MonitorForActivity:
+		return "activity", nil
+	case MonitorForSilence:
+		return "silence", nil
+	default:
+		return nil, fmt.Errorf("invalid monitor_for value: %d", m)
+	}
 }
 
 // Where key is process name.
 type DependsOnConfig map[string]ProcessDependency
 
 type ProcessDependency struct {
-	Condition  ProcessCondition       `yaml:",omitempty" jsonschema:"type=string,enum=process_started,enum=process_healthy,enum=process_completed,enum=process_completed_successfully,enum=process_log_ready"`
-	Extensions map[string]interface{} `yaml:",inline"`
+	Condition  ProcessCondition       `yaml:",omitempty" json:"condition,omitempty" jsonschema:"type=string,enum=process_started,enum=process_healthy,enum=process_completed,enum=process_completed_successfully,enum=process_log_ready"`
+	Extensions map[string]interface{} `yaml:",inline" json:"extensions,omitempty"`
 }
 
 const (

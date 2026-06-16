@@ -22,15 +22,15 @@ Add an `mcp_server` section to your process-compose configuration file:
 
 ```yaml
 mcp_server:
-  host: localhost      # Required: host to bind to (ignored for stdio)
-  port: 3000           # Required: port to listen on (ignored for stdio)
-  # transport: sse    # Optional: defaults to "sse". Supported: "sse", "stdio"
+  host: localhost              # Required: host to bind to (ignored for stdio)
+  port: 3000                   # Required: port to listen on (ignored for stdio)
+  # transport: sse             # Optional: defaults to "sse". Supported: "sse", "stdio"
+  # expose_control_tools: true # Optional: expose built-in pc_* control tools (default false)
 ```
 
-> [!NOTE]
-> **Both SSE and Stdio transports are supported.** The transport defaults to SSE when not specified, making it optional in your configuration.
+> :bulb: **Both SSE and Stdio transports are supported.** The transport defaults to SSE when not specified, making it optional in your configuration.
 >
-> The MCP server will only start if at least one process has an `mcp:` configuration section. If you configure `mcp_server` but have no MCP processes, the server will not start.
+> The MCP server will only start if at least one process has an `mcp:` configuration section, **or** `expose_control_tools` is set to `true`. If you configure `mcp_server` with neither, the server will not start.
 
 ### Timeout Configuration
 
@@ -115,8 +115,7 @@ arguments:
 - **Required arguments** (`required: true`): Must be provided when the tool is invoked. If missing, the invocation will fail with an error.
 - **Optional arguments** (`required: false` or omitted): Can be omitted. When not provided, the `@{arg}` placeholder is replaced with an empty string.
 
-> [!NOTE]
-> Optional arguments are substituted with an empty string when not provided. Design your commands to handle this gracefully, or use default values (see below).
+> :bulb: Optional arguments are substituted with an empty string when not provided. Design your commands to handle this gracefully, or use default values (see below).
 
 #### Argument Substitution
 
@@ -222,6 +221,45 @@ processes:
 
 Resources are accessed via URIs in the format: `process://<process-name>`
 
+## Built-in Control Tools
+
+In addition to user-defined process tools, Process Compose can expose its own control plane as MCP tools. This lets MCP clients (AI assistants, MCP Inspector, etc.) start, stop, scale, restart, list, inspect, and read logs from any process in the project — the same operations available through the CLI and HTTP API.
+
+Control tools are **opt-in**. Enable them by setting `expose_control_tools: true` on `mcp_server`:
+
+```yaml
+mcp_server:
+  host: localhost
+  port: 3000
+  expose_control_tools: true
+```
+
+When enabled, the MCP server starts even if no process has an `mcp:` section, and registers the following tools alongside any user-defined ones:
+
+| Tool | Description | Arguments |
+| ---- | ----------- | --------- |
+| `pc_process_start` | Start a process | `name: string` |
+| `pc_process_stop` | Stop one or more processes | `names: array<string>` |
+| `pc_process_restart` | Restart a process | `name: string` |
+| `pc_process_scale` | Scale a process to a replica count | `name: string`, `scale: integer` |
+| `pc_process_get` | Get the state of a single process | `name: string` |
+| `pc_process_list` | List all processes and their states | _none_ |
+| `pc_process_ports` | Get TCP/UDP ports a process is listening on | `name: string` |
+| `pc_process_logs` | Fetch the most recent log lines (one-shot) | `name: string`, `tail: integer` (default 100), `offset_from_end: integer` (default 0) |
+| `pc_process_logs_truncate` | Truncate the log buffer for a process | `name: string` |
+| `pc_process_logs_search` | Search log buffers using BM25 ranking across one or all processes | `query: string`, `name: string` (optional, all if omitted), `top_k: integer` (default 20, max 100), `log_limit: integer` (default 500, max 5000) |
+| `pc_project_state` | Get overall project state (uptime, counts, optional memory) | `with_memory: boolean` (default false) |
+| `pc_project_is_ready` | Check whether all processes are ready | _none_ |
+| `pc_project_dependency_graph` | Get the project dependency graph (nodes, statuses, upstream conditions) | _none_ |
+
+The `pc_` prefix avoids collisions with user-defined tools — it is safe to have a user process named `start` alongside `pc_process_start`.
+
+> :warning: Control tools give an MCP client full process-management access to the running project (including stop/scale/restart). Enable them only on transports and instances you trust.
+
+The MCP server can host both kinds of tools at once — user-defined process tools (from per-process `mcp:` blocks) and the built-in `pc_*` control tools.
+
+`pc_process_logs_search` caps total work at 50,000 log lines per call. When `log_limit × <process count>` would exceed that, each process's budget is reduced to a fair share (most-recent lines kept) and the response includes `"truncated": true`.
+
 ## Complete Examples
 
 ### Log Analysis Tool
@@ -311,8 +349,7 @@ mcp_server:
 }
 ```
 
-> [!NOTE]
-> When using `stdio` transport, the TUI is automatically disabled. The TUI and stdio transport cannot be used at the same time as they both require control over the process's standard input and output streams.
+> :bulb: When using `stdio` transport, the TUI is automatically disabled. The TUI and stdio transport cannot be used at the same time as they both require control over the process's standard input and output streams.
 
 ### MCP Inspector
 

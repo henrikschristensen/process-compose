@@ -11,7 +11,7 @@ process-compose project update [flags]
 ```
   -f, --config stringArray      path to config files to load (env: PC_CONFIG_FILES)
   -h, --help                    help for update
-  -n, --namespace stringArray   run only specified namespaces (default all)
+  -n, --namespace stringArray   run only specified namespaces (default all, env: PC_NAMESPACES)
   -v, --verbose                 verbose output
 ```
 
@@ -20,6 +20,7 @@ process-compose project update [flags]
 ```
   -a, --address string       address of the target process compose server (default "localhost")
   -L, --log-file string      Specify the log file path (env: PC_LOG_FILE) (default "/tmp/process-compose-<user>.log")
+      --log-no-color         disable color output in the log file (env: PC_LOG_NO_COLOR)
       --no-server            disable HTTP server (env: PC_NO_SERVER)
       --ordered-shutdown     shut down processes in reverse dependency order
   -p, --port int             port number (env: PC_PORT_NUM) (default 8080)
@@ -32,4 +33,3 @@ process-compose project update [flags]
 ### SEE ALSO
 
 * [process-compose project](process-compose_project.md)	 - Execute operations on a running Process Compose project
-

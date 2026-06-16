@@ -5,6 +5,7 @@ VERSION = $(shell git describe --abbrev=0)
 GIT_REV    ?= $(shell git rev-parse --short HEAD)
 DATE       ?= $(shell TZ=UTC0 git show --quiet --date='format-local:%Y-%m-%dT%H:%M:%SZ' --format="%cd")
 NUMVER = $(shell echo ${VERSION} | cut -d"v" -f 2)
+NIX_VERSION = $(shell sed -n '7p' default.nix | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
 PKG = github.com/f1bonacc1/${NAME}
 SHELL := /usr/bin/env bash
 PROJ_NAME := Process Compose
@@ -21,7 +22,7 @@ ifeq ($(OS),Windows_NT)
 	RM = cmd /C del /Q /F
 endif
 
-.PHONY: test run testrace docs schema
+.PHONY: test run testrace docs schema check-nix-version
 
 buildrun: build run
 
@@ -74,12 +75,19 @@ coverhtml:
 	go test -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out
 
-run:
+run: build
 	PC_DEBUG_MODE=1 ./bin/${NAME}${EXT} -e .env
 
 clean:
 	$(RM) bin/${NAME}*
-release:
+
+check-nix-version:
+	@if [ "$(NUMVER)" != "$(NIX_VERSION)" ]; then \
+		echo "ERROR: git tag version ($(NUMVER)) does not match default.nix version ($(NIX_VERSION))"; \
+		exit 1; \
+	fi
+
+release: check-nix-version
 	source exports
 	goreleaser release --clean --skip validate --auto-snapshot
 snapshot:
@@ -118,4 +126,4 @@ $(SWAG2OP_GEN): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	test -s $(LOCALBIN)/golangci-lint || \
-	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.3

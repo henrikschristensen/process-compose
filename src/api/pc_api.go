@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 	"strconv"
-	"sync"
 
 	"github.com/f1bonacc1/process-compose/src/types"
 
@@ -28,7 +27,6 @@ import (
 
 type PcApi struct {
 	project app.IProject
-	wsMtx   sync.Mutex
 }
 
 func NewPcApi(project app.IProject) *PcApi {
@@ -167,6 +165,40 @@ func (api *PcApi) TruncateProcessLogs(c *gin.Context) {
 func (api *PcApi) StopProcess(c *gin.Context) {
 	name := c.Param("name")
 	err := api.project.StopProcess(name)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"name": name})
+}
+
+// @Schemes
+// @Id				SendSignal
+// @Description	Sends a POSIX signal to the process
+// @Tags			Process
+// @Summary		Signal a process
+// @Produce		json
+// @Param			name	path		string				true	"Process Name"
+// @Param			signal	path		int					true	"Signal Number"
+// @Success		200		{object}	api.NameResponse	"Signaled Process Name"
+// @Failure		400		{object}	map[string]string
+// @Router			/process/signal/{name}/{signal} [patch]
+func (api *PcApi) SendSignal(c *gin.Context) {
+	name := c.Param("name")
+	sig, err := strconv.Atoi(c.Param("signal"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid signal: " + err.Error()})
+		return
+	}
+
+	const maxSignal = 22
+	if sig < 0 || sig > maxSignal {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid signal: " + strconv.Itoa(sig) + ". Must be between 0 and " + strconv.Itoa(maxSignal)})
+		return
+	}
+
+	err = api.project.SendSignal(name, sig)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

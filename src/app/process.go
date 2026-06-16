@@ -37,7 +37,6 @@ const (
 type Process struct {
 	sync.Mutex
 	globalEnv            []string
-	confMtx              sync.Mutex
 	procConf             *types.ProcessConfig
 	procState            *types.ProcessState
 	stateMtx             sync.Mutex
@@ -84,7 +83,13 @@ type Process struct {
 	refRate              time.Duration
 	withRecursiveMetrics bool
 	processTree          *ProcessTree
+	publishState         StatePublisher
 }
+
+// StatePublisher is invoked from Process whenever the observable state of
+// the process changes. It is supplied by the owner (typically ProjectRunner)
+// and may be nil — Process treats that as a no-op.
+type StatePublisher func(ev types.ProcessStateEvent)
 
 func NewProcess(opts ...ProcOpts) *Process {
 	proc := &Process{
@@ -111,7 +116,18 @@ func NewProcess(opts ...ProcOpts) *Process {
 
 func (p *Process) run() int {
 	if p.isState(types.ProcessStateTerminating) {
-		return 0
+		select {
+		case <-p.procRunCtx.Done():
+			// Concurrent stop in progress — honour it.
+			return 0
+		default:
+			// Stale "Terminating" state from a prior broken shutdown (e.g. zombie
+			// that was reaped without completing the normal lifecycle). Reset so
+			// the process can start fresh.
+			log.Warn().Str("process", p.getName()).
+				Msg("Resetting stale Terminating state before start")
+			p.setState(types.ProcessStatePending)
+		}
 	}
 
 	if err := p.validateProcess(); err != nil {
@@ -131,9 +147,20 @@ loop:
 			return 1
 		}
 
-		p.setStartTime(time.Now())
+		now := time.Now()
+		p.setStartTime(now)
 		p.stateMtx.Lock()
 		p.procState.Pid = p.command.Pid()
+		if p.procState.ProcessStartTime == nil {
+			startCopy := now
+			p.procState.ProcessStartTime = &startCopy
+			// Processes without any readiness signal are considered ready as
+			// soon as they start. Probes/log-ready handlers override this later.
+			if p.readyProber == nil && p.procConf.ReadyLogLine == "" {
+				readyCopy := now
+				p.procState.ProcessReadyTime = &readyCopy
+			}
+		}
 		p.metricsProc, err = puproc.NewProcess(int32(p.procState.Pid))
 		if err != nil {
 			log.Err(err).Msgf("Could not find pid %d with name %s", p.procState.Pid, p.getName())
@@ -188,12 +215,23 @@ func (p *Process) waitForStdOutErr() {
 	ctx, cancel := context.WithCancel(context.Background())
 	if p.procConf.IsDaemon {
 		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(p.procConf.LaunchTimeout)*time.Second)
+	} else if p.isState(types.ProcessStateTerminating) {
+		// In terminating state, never block forever on stdout/stderr drain.
+		// Reaching command.Wait() is required to reap child processes.
+		timeoutSec := p.procConf.ShutDownParams.ShutDownTimeout
+		if timeoutSec == UndefinedShutdownTimeoutSec {
+			timeoutSec = DefaultShutdownTimeoutSec
+		}
+		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
 	}
 	defer cancel()
 	if p.stdOutDone != nil {
 		select {
 		case <-ctx.Done():
 			log.Debug().Msgf("%s stdout done with timeout", p.getName())
+			return
+		case <-p.procRunCtx.Done():
+			log.Debug().Msgf("%s stdout abandoned: process stopped", p.getName())
 			return
 		case <-p.stdOutDone:
 			log.Debug().Msgf("%s stdout done", p.getName())
@@ -204,6 +242,9 @@ func (p *Process) waitForStdOutErr() {
 		select {
 		case <-ctx.Done():
 			log.Debug().Msgf("%s stderr done with timeout", p.getName())
+			return
+		case <-p.procRunCtx.Done():
+			log.Debug().Msgf("%s stderr abandoned: process stopped", p.getName())
 			return
 		case <-p.stdErrDone:
 			log.Debug().Msgf("%s stderr done", p.getName())
@@ -384,6 +425,13 @@ func (p *Process) internalStop() error {
 	return p.stopProcess(false)
 }
 
+func (p *Process) sendSignal(sig int) error {
+	if !p.isSignalable() {
+		return fmt.Errorf("process %s is not running", p.getName())
+	}
+	return p.command.Stop(sig, p.procConf.ShutDownParams.ParentOnly)
+}
+
 func (p *Process) stopProcess(withNoRestart bool) error {
 	if withNoRestart {
 		p.runCancelFn()
@@ -468,7 +516,18 @@ func (p *Process) doConfiguredStop(params types.ShutDownParams) error {
 }
 
 func (p *Process) isRunning() bool {
-	return p.isOneOfStates(types.ProcessStateRunning, types.ProcessStateLaunched, types.ProcessStateLaunching)
+	return p.isOneOfStates(
+		types.ProcessStateRunning,
+		types.ProcessStateLaunched,
+		types.ProcessStateLaunching,
+	)
+}
+
+func (p *Process) isSignalable() bool {
+	return p.isOneOfStates(
+		types.ProcessStateRunning,
+		types.ProcessStateTerminating,
+	)
 }
 
 func (p *Process) prepareForShutDown() {
@@ -504,8 +563,19 @@ func (p *Process) onProcessEnd(state string) {
 	if p.readyProber != nil {
 		p.readyCancelFn()
 	}
-	p.setState(state)
+	p.setStateNoPublish(state)
 	p.updateProcState()
+
+	p.stateMtx.Lock()
+	if p.procState.ProcessEndTime == nil {
+		now := time.Now()
+		p.procState.ProcessEndTime = &now
+	}
+	ev := p.snapshotEventLocked()
+	p.stateMtx.Unlock()
+	// Single publish carrying the terminal Status, final IsRunning=false
+	// (set by updateProcState), final ExitCode, and ProcessEndTime.
+	p.publishLocked(ev)
 
 	p.Lock()
 	p.done = true
@@ -518,7 +588,7 @@ func (p *Process) getLogPath() string {
 
 	if strings.Contains(logLocation, LogReplicaNum) {
 		replicaStr := strconv.Itoa(p.procConf.ReplicaNum)
-		logLocation = strings.Replace(logLocation, LogReplicaNum, replicaStr, -1)
+		logLocation = strings.ReplaceAll(logLocation, LogReplicaNum, replicaStr)
 	} else if p.procConf.Replicas > 1 {
 		logLocation = fmt.Sprintf("%s.%d", logLocation, p.procConf.ReplicaNum)
 	}
@@ -643,7 +713,7 @@ func (p *Process) getProcResources(proc *puproc.Process) (int64, float64) {
 		//	Msg("Error retrieving memory stats")
 		return -1, -1
 	}
-	cpuPercent, err := proc.CPUPercentWithContext(context.Background())
+	cpuPercent, err := proc.PercentWithContext(context.Background(), 0)
 	if err != nil {
 		log.Err(err).
 			Str("process", p.getName()).
@@ -687,7 +757,9 @@ func (p *Process) handleOutput(pipe io.ReadCloser, output string, handler func(m
 			break
 		}
 		if p.procConf.ReadyLogLine != "" && p.procState.Health == types.ProcessHealthUnknown && strings.Contains(line, p.procConf.ReadyLogLine) {
-			p.procState.Health = types.ProcessHealthReady
+			// setProcHealth takes stateMtx, updates Health and (for Ready)
+			// records ProcessReadyTime atomically.
+			p.setProcHealth(types.ProcessHealthReady)
 			p.cancelReadyLogFunc(nil)
 		}
 		p.checkElevatedProcOutput(line)
@@ -753,16 +825,46 @@ func (p *Process) isOneOfStates(states ...string) bool {
 
 func (p *Process) setState(state string) {
 	p.stateMtx.Lock()
+	p.procState.Status = state
+	p.onStateChange(state)
+	ev := p.snapshotEventLocked()
+	p.stateMtx.Unlock()
+	p.publishLocked(ev)
+}
+
+// setStateNoPublish sets the state without firing a publish. Use this when
+// the caller will publish a single, more complete event afterwards (e.g.
+// onProcessEnd, which also finalises ProcessEndTime and IsRunning).
+func (p *Process) setStateNoPublish(state string) {
+	p.stateMtx.Lock()
 	defer p.stateMtx.Unlock()
 	p.procState.Status = state
 	p.onStateChange(state)
+}
+
+// snapshotEventLocked builds a self-contained ProcessStateEvent from the
+// current procState. Caller must hold stateMtx.
+func (p *Process) snapshotEventLocked() types.ProcessStateEvent {
+	stateCopy := *p.procState
+	return types.ProcessStateEvent{State: stateCopy}
+}
+
+// publishLocked sends the event to the registered publisher, if any. The
+// caller must NOT hold stateMtx (the broadcaster fans out under its own
+// mutex; observers should not call back into Process, but holding stateMtx
+// here would be unnecessary contention).
+func (p *Process) publishLocked(ev types.ProcessStateEvent) {
+	if p.publishState != nil {
+		p.publishState(ev)
+	}
 }
 
 func (p *Process) getState() *types.ProcessState {
 	p.updateProcState()
 	p.stateMtx.Lock()
 	defer p.stateMtx.Unlock()
-	return p.procState
+	stateCopy := *p.procState
+	return &stateCopy
 }
 
 type filterFn func(*types.ProcessState)
@@ -785,9 +887,13 @@ func (p *Process) getStatusName() string {
 
 func (p *Process) setStateAndRun(state string, runnable func() error) error {
 	p.stateMtx.Lock()
-	defer p.stateMtx.Unlock()
 	p.procState.Status = state
 	p.onStateChange(state)
+	ev := p.snapshotEventLocked()
+	defer func() {
+		p.stateMtx.Unlock()
+		p.publishLocked(ev)
+	}()
 	return runnable()
 }
 
@@ -801,7 +907,7 @@ func (p *Process) GetPty() *os.File {
 func (p *Process) onStateChange(state string) {
 	switch state {
 	case types.ProcessStateSkipped:
-		p.setExitCode(1)
+		p.setExitCodeLocked(1)
 	case types.ProcessStateRestarting:
 		fallthrough
 	case types.ProcessStateLaunching:
@@ -1000,21 +1106,39 @@ func (p *Process) logOpenPort(label string, port uint16) {
 }
 
 func (p *Process) getExitCode() int {
-	defer p.confMtx.Unlock()
-	p.confMtx.Lock()
+	p.stateMtx.Lock()
+	defer p.stateMtx.Unlock()
 	return p.procState.ExitCode
 }
 
 func (p *Process) setExitCode(code int) {
-	defer p.confMtx.Unlock()
-	p.confMtx.Lock()
+	p.stateMtx.Lock()
+	defer p.stateMtx.Unlock()
+	p.procState.ExitCode = code
+}
+
+// setExitCodeLocked sets the exit code when stateMtx is already held.
+func (p *Process) setExitCodeLocked(code int) {
 	p.procState.ExitCode = code
 }
 
 func (p *Process) setProcHealth(health string) {
-	defer p.confMtx.Unlock()
-	p.confMtx.Lock()
+	p.stateMtx.Lock()
+	prev := p.procState.Health
 	p.procState.Health = health
+	if health == types.ProcessHealthReady && p.procState.ProcessReadyTime == nil {
+		now := time.Now()
+		p.procState.ProcessReadyTime = &now
+	}
+	changed := prev != health
+	var ev types.ProcessStateEvent
+	if changed {
+		ev = p.snapshotEventLocked()
+	}
+	p.stateMtx.Unlock()
+	if changed {
+		p.publishLocked(ev)
+	}
 }
 
 // set elevated process password

@@ -21,8 +21,9 @@ process-compose [flags]
   -d, --hide-disabled            hide disabled processes (env: PC_HIDE_DISABLED_PROC)
       --keep-project             keep the project running even after all processes exit
   -L, --log-file string          Specify the log file path (env: PC_LOG_FILE) (default "/tmp/process-compose-<user>.log")
+      --log-no-color             disable color output in the log file (env: PC_LOG_NO_COLOR)
       --logs-truncate            truncate process logs buffer on startup
-  -n, --namespace stringArray    run only specified namespaces (default all)
+  -n, --namespace stringArray    run only specified namespaces (default all, env: PC_NAMESPACES)
       --no-server                disable HTTP server (env: PC_NO_SERVER)
       --ordered-shutdown         shut down processes in reverse dependency order
   -p, --port int                 port number (env: PC_PORT_NUM) (default 8080)
@@ -43,6 +44,7 @@ process-compose [flags]
 
 ### SEE ALSO
 
+* [process-compose analyze](process-compose_analyze.md)	 - Analyze startup timing and dependency information
 * [process-compose attach](process-compose_attach.md)	 - Attach the Process Compose TUI Remotely to a Running Process Compose Server
 * [process-compose completion](process-compose_completion.md)	 - Generate the autocompletion script for the specified shell
 * [process-compose down](process-compose_down.md)	 - Stops all the running processes and terminates the Process Compose
@@ -56,4 +58,3 @@ process-compose [flags]
 * [process-compose run](process-compose_run.md)	 - Run PROCESS in the foreground, and its dependencies in the background
 * [process-compose up](process-compose_up.md)	 - Run process compose project
 * [process-compose version](process-compose_version.md)	 - Print version and build info
-

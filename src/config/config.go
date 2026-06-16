@@ -78,6 +78,8 @@ const (
 	settingsFileName   = "settings.yaml"
 	configHome         = "process-compose"
 	recipesPath        = "recipes"
+	DonateURL          = "https://github.com/sponsors/f1bonacc1"
+	DiscussionsURL     = "https://github.com/f1bonacc1/process-compose/discussions"
 )
 
 var (
@@ -204,6 +206,14 @@ func GetConfigDefault() []string {
 	return []string{}
 }
 
+func GetNamespaceDefault() []string {
+	val, found := os.LookupEnv(EnvVarNameNamespace)
+	if found {
+		return strings.Split(val, ",")
+	}
+	return []string{}
+}
+
 func CreateProcCompHome() string {
 	if env := os.Getenv(pcConfigEnv); env != "" {
 		return env
@@ -233,7 +243,7 @@ func getProcConfigDir() string {
 }
 
 func GetShortCutsPaths(extraFiles []string) []string {
-	var existingPaths []string = make([]string, 0, len(scFiles)+len(extraFiles))
+	existingPaths := make([]string, 0, len(scFiles)+len(extraFiles))
 
 	// Load shortcuts in order of precedence, lowest to highest: first from the
 	// config directory, then from environment variables, then from the CLI
@@ -361,5 +371,10 @@ func getHideDisabledDefault() bool {
 
 func getWithRecursiveMetricsEnvDefault() bool {
 	_, found := os.LookupEnv(EnvVarWithRecursiveMetrics)
+	return found
+}
+
+func getLogNoColorDefault() bool {
+	_, found := os.LookupEnv(EnvVarLogNoColor)
 	return found
 }

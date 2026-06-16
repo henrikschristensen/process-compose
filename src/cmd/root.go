@@ -20,14 +20,16 @@ import (
 	"github.com/f1bonacc1/process-compose/src/loader"
 	"github.com/f1bonacc1/process-compose/src/mcp"
 	"github.com/f1bonacc1/process-compose/src/types"
+	"github.com/f1bonacc1/process-compose/src/updater"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
 var (
-	opts    *loader.LoaderOptions
-	logFile *os.File
+	opts      *loader.LoaderOptions
+	logFile   *os.File
+	updateMsg chan string // receives update notification from background check
 
 	// rootCmd represents the base command when called without any subcommands
 	rootCmd = &cobra.Command{
@@ -42,6 +44,23 @@ var (
 			pcFlags.PcThemeChanged = cmd.Flags().Changed(flagTheme)
 			pcFlags.SortColumnChanged = cmd.Flags().Changed(flagSort)
 			config.CliApiTokenPath = *pcFlags.ApiTokenPath
+
+			isVersionUpdate := cmd.Name() == versionUpdateCmd.Name() && cmd.Parent() != nil && cmd.Parent().Name() == versionCmd.Name()
+			if config.CheckForUpdates == "true" && !isMCPStdio && !isVersionUpdate {
+				checkForUpdatesInBackground()
+			}
+		},
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			if updateMsg != nil {
+				select {
+				case msg, ok := <-updateMsg:
+					if ok && msg != "" {
+						fmt.Fprint(os.Stderr, msg)
+					}
+				case <-time.After(500 * time.Millisecond):
+					// Don't block exit for too long
+				}
+			}
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			runProjectCmd([]string{})
@@ -117,7 +136,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(pcFlags.Address, "address", "", *pcFlags.Address, "address to listen on (env: "+config.EnvVarNameAddress+")")
 	rootCmd.Flags().StringArrayVarP(&opts.FileNames, "config", "f", config.GetConfigDefault(), "path to config files to load (env: "+config.EnvVarNameConfig+")")
 	rootCmd.Flags().StringArrayVarP(&opts.EnvFileNames, "env", "e", []string{".env"}, "path to env files to load")
-	rootCmd.Flags().StringArrayVarP(&nsAdmitter.EnabledNamespaces, "namespace", "n", nil, "run only specified namespaces (default all)")
+	rootCmd.Flags().StringArrayVarP(&nsAdmitter.EnabledNamespaces, "namespace", "n", config.GetNamespaceDefault(), "run only specified namespaces (default all, env: "+config.EnvVarNameNamespace+")")
 	rootCmd.PersistentFlags().StringVarP(pcFlags.LogFile, "log-file", "L", *pcFlags.LogFile, "Specify the log file path (env: "+config.LogPathEnvVarName+")")
 	rootCmd.PersistentFlags().BoolVar(pcFlags.IsReadOnlyMode, "read-only", *pcFlags.IsReadOnlyMode, "enable read-only mode (env: "+config.EnvVarReadOnlyMode+")")
 	rootCmd.Flags().BoolVar(pcFlags.DisableDotEnv, "disable-dotenv", *pcFlags.DisableDotEnv, "disable .env file loading (env: "+config.EnvVarDisableDotEnv+"=1)")
@@ -126,6 +145,7 @@ func init() {
 	rootCmd.Flags().BoolVar(pcFlags.WithRecursiveMetrics, "recursive-metrics", *pcFlags.WithRecursiveMetrics, "collect metrics recursively (env: "+config.EnvVarWithRecursiveMetrics+")")
 	rootCmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "validate the config and exit")
 	rootCmd.PersistentFlags().StringVar(pcFlags.ApiTokenPath, "token-file", *pcFlags.ApiTokenPath, "path to a file containing the API token (env: "+config.EnvVarApiTokenPath+")")
+	rootCmd.PersistentFlags().BoolVar(pcFlags.LogNoColor, "log-no-color", *pcFlags.LogNoColor, "disable color output in the log file (env: "+config.EnvVarLogNoColor+")")
 	rootCmd.Flags().AddFlag(commonFlags.Lookup(flagReverse))
 	rootCmd.Flags().AddFlag(commonFlags.Lookup(flagSort))
 	rootCmd.Flags().AddFlag(commonFlags.Lookup(flagTheme))
@@ -164,6 +184,7 @@ func setupLogger() *os.File {
 			Writer: zerolog.LevelWriterAdapter{Writer: zerolog.ConsoleWriter{
 				Out:        file,
 				TimeFormat: "06-01-02 15:04:05.000",
+				NoColor:    *pcFlags.LogNoColor,
 			}},
 		},
 		&zerolog.FilteredLevelWriter{
@@ -302,4 +323,29 @@ func (f refreshRateFlag) Set(str string) error {
 
 func (f refreshRateFlag) Type() string {
 	return "duration"
+}
+
+func checkForUpdatesInBackground() {
+	updateMsg = make(chan string, 1)
+	go func() {
+		latest, err := updater.GetLatestReleaseName()
+		if err != nil {
+			close(updateMsg)
+			return
+		}
+		if updater.CompareVersions(config.Version, latest) >= 0 {
+			close(updateMsg)
+			return
+		}
+		hint := "process-compose version update"
+		if _, err := updater.CheckCanReplace(); err != nil {
+			if runtime.GOOS == "windows" {
+				hint = "an Administrator shell to run: process-compose version update"
+			} else {
+				hint = "sudo process-compose version update"
+			}
+		}
+		updateMsg <- fmt.Sprintf("\n\033[33mInfo:\033[0m New version available: %s -> %s. Run '%s'\n",
+			config.Version, latest, hint)
+	}()
 }

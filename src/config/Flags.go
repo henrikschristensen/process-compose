@@ -35,6 +35,7 @@ const (
 	EnvVarNamePort             = "PC_PORT_NUM"
 	EnvVarNameTui              = "PC_DISABLE_TUI"
 	EnvVarNameConfig           = "PC_CONFIG_FILES"
+	EnvVarNameNamespace        = "PC_NAMESPACES"
 	EnvVarNameShortcuts        = "PC_SHORTCUTS_FILES"
 	EnvVarNameRecipes          = "PC_RECIPE_FILES"
 	EnvVarNameNoServer         = "PC_NO_SERVER"
@@ -47,6 +48,7 @@ const (
 	EnvVarWithRecursiveMetrics = "PC_RECURSIVE_METRICS"
 	EnvVarDisabledProcs        = "PC_DISABLED_PROCESSES"
 	EnvVarNameAddress          = "PC_ADDRESS"
+	EnvVarLogNoColor           = "PC_LOG_NO_COLOR"
 )
 
 // Flags represents PC configuration flags.
@@ -91,6 +93,7 @@ type Flags struct {
 	LogsTruncate         *bool
 	WithRecursiveMetrics *bool
 	ApiTokenPath         *string
+	LogNoColor           *bool
 }
 
 // NewFlags returns new configuration flags.
@@ -132,6 +135,7 @@ func NewFlags() *Flags {
 		LogsTruncate:         toPtr(false),
 		WithRecursiveMetrics: toPtr(getWithRecursiveMetricsEnvDefault()),
 		ApiTokenPath:         toPtr(getApiTokenPathDefault()),
+		LogNoColor:           toPtr(getLogNoColorDefault()),
 	}
 }
 
